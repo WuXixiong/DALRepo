@@ -5,10 +5,12 @@ import numpy as np
 class Uncertainty(ALMethod):
     def __init__(self, args, models, unlabeled_dst, U_index, selection_method="CONF", **kwargs):
         super().__init__(args, models, unlabeled_dst, U_index, **kwargs)
-        selection_choices = ["CONF", "Entropy", "Margin", "MeanSTD"]
+        selection_choices = ["CONF", "Entropy", "Margin", "MeanSTD", "AdversarialBIM"]
         if selection_method not in selection_choices:
             raise NotImplementedError("Selection algorithm unavailable.")
         self.selection_method = selection_method
+        # for AdversarialBIM
+        self.eps = self.args.eps
 
     def run(self):
         scores = self.rank_uncertainty()
@@ -17,44 +19,49 @@ class Uncertainty(ALMethod):
 
     def rank_uncertainty(self):
         self.models['backbone'].eval()
-        with torch.no_grad():
-            selection_loader = torch.utils.data.DataLoader(self.unlabeled_set, batch_size=self.args.test_batch_size, num_workers=self.args.workers)
+        selection_loader = torch.utils.data.DataLoader(self.unlabeled_set, batch_size=self.args.test_batch_size, num_workers=self.args.workers)
 
-            scores = np.array([])
-            batch_num = len(selection_loader)
-            print("| Calculating uncertainty of Unlabeled set")
-            for i, data in enumerate(selection_loader):
-                inputs = data[0].to(self.args.device)
-                if i % self.args.print_freq == 0:
-                    print("| Selecting for batch [%3d/%3d]" % (i + 1, batch_num))
-                if self.selection_method == "CONF":
-                    preds, _ = self.models['backbone'](inputs)
-                    confs = preds.max(axis=1).values.cpu().numpy()
-                    scores = np.append(scores, confs)
-                elif self.selection_method == "Entropy":
-                    preds, _ = self.models['backbone'](inputs)
-                    preds = torch.nn.functional.softmax(preds, dim=1).cpu().numpy()
-                    entropys = (np.log(preds + 1e-6) * preds).sum(axis=1)
-                    scores = np.append(scores, entropys)
-                elif self.selection_method == 'Margin':
-                    preds, _ = self.models['backbone'](inputs)
-                    preds = torch.nn.functional.softmax(preds, dim=1)
-                    preds_argmax = torch.argmax(preds, dim=1)
-                    max_preds = preds[torch.ones(preds.shape[0], dtype=bool), preds_argmax].clone()
-                    preds[torch.ones(preds.shape[0], dtype=bool), preds_argmax] = -1.0
-                    preds_sub_argmax = torch.argmax(preds, dim=1)
-                    margins = (max_preds - preds[torch.ones(preds.shape[0], dtype=bool), preds_sub_argmax]).cpu().numpy()
-                    scores = np.append(scores, margins)
+        scores = np.array([])
+        batch_num = len(selection_loader)
+        print("| Calculating uncertainty of Unlabeled set")
+        for i, data in enumerate(selection_loader):
+            inputs = data[0].to(self.args.device)
+            if i % self.args.print_freq == 0:
+                print("| Selecting for batch [%3d/%3d]" % (i + 1, batch_num))
+            if self.selection_method == "AdversarialBIM":
+                self.models['backbone'].train()
+                self.models['backbone'] = self.models['backbone'].to(self.args.device)
+                scores = np.append(scores, self.cal_dis_bim(inputs).cpu().numpy())
+            else:
+                with torch.no_grad():
+                    if self.selection_method == "CONF":
+                        preds, _ = self.models['backbone'](inputs)
+                        confs = preds.max(axis=1).values.cpu().numpy()
+                        scores = np.append(scores, confs)
+                    elif self.selection_method == "Entropy":
+                        preds, _ = self.models['backbone'](inputs)
+                        preds = torch.nn.functional.softmax(preds, dim=1).cpu().numpy()
+                        entropys = (np.log(preds + 1e-6) * preds).sum(axis=1)
+                        scores = np.append(scores, entropys)
+                    elif self.selection_method == 'Margin':
+                        preds, _ = self.models['backbone'](inputs)
+                        preds = torch.nn.functional.softmax(preds, dim=1)
+                        preds_argmax = torch.argmax(preds, dim=1)
+                        max_preds = preds[torch.ones(preds.shape[0], dtype=bool), preds_argmax].clone()
+                        preds[torch.ones(preds.shape[0], dtype=bool), preds_argmax] = -1.0
+                        preds_sub_argmax = torch.argmax(preds, dim=1)
+                        margins = (max_preds - preds[torch.ones(preds.shape[0], dtype=bool), preds_sub_argmax]).cpu().numpy()
+                        scores = np.append(scores, margins)
 
-            if self.selection_method == 'MeanSTD':
-                probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
-                # 将Tensor转移到CPU并转换为NumPy数组
-                probs_np = probs.cpu().numpy()
-                # 计算标准差
-                sigma_c = np.std(probs_np, axis=0)
-                # sigma_c = np.std(probs, axis=0)
-                uncertainties = np.mean(sigma_c, axis=-1)
-                scores = np.append(scores, uncertainties)
+        if self.selection_method == "MeanSTD":
+            probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
+            # 将Tensor转移到CPU并转换为NumPy数组
+            probs_np = probs.cpu().numpy()
+            # 计算标准差
+            sigma_c = np.std(probs_np, axis=0)
+            # sigma_c = np.std(probs, axis=0)
+            uncertainties = np.mean(sigma_c, axis=-1)
+            scores = np.append(scores, uncertainties)
 
         return scores
 
@@ -100,3 +107,35 @@ class Uncertainty(ALMethod):
                     evaluated_instances = end_slice
 
         return probs
+
+
+    def cal_dis_bim(self, x):
+        self.models['backbone'].train()
+        self.models['backbone'] = self.models['backbone'].to(self.args.device)
+
+        nx = x.to(self.args.device)
+        nx.requires_grad_()
+        eta = torch.zeros(nx.shape, device=self.args.device)  # Automatically set device during creation
+
+
+        # First prediction to get the initial class labels
+        out, _ = self.models['backbone'](nx)
+        initial_pred = out.max(1)[1].detach()
+
+        while True:
+            out, _ = self.models['backbone'](nx + eta)
+            current_pred = out.max(1)[1]
+
+            if not torch.all(current_pred == initial_pred):
+                break
+
+            loss = torch.nn.functional.cross_entropy(out, initial_pred)
+            # loss.requires_grad = True
+            loss.backward()
+
+            # eta.data += self.eps * torch.sign(nx.grad.data)
+            # nx.grad.data.zero_()
+            eta.data += self.eps * torch.sign(nx.grad.data)
+            nx.grad.data.zero_()
+
+        return (eta * eta).sum()
