@@ -125,3 +125,10 @@ if __name__ == '__main__':
         if args.method == 'MQNet':
             file_name = file_name+'_'+str(args.mqnet_mode)+'_v3_b64'
         np.savetxt(file_name, logs, fmt='%.4f', delimiter=',')
+
+        # Ensure the directory exists before saving the file
+        directory = os.path.dirname(file_name)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+
+        np.savetxt(file_name, logs, fmt='%.4f', delimiter=',')
