@@ -5,6 +5,8 @@ from utils import *
 
 parser = argparse.ArgumentParser(description='Parameter Processing')
 
+# new arguments
+parser.add_argument('--n_drop', type=int, default=10, help='# of drop out')
 # Basic arguments
 parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset') #CIFAR10, CIFAR100, ImageNet50
 parser.add_argument('--data_path', type=str, default='data', help='dataset path')
