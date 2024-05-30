@@ -6,6 +6,7 @@ from utils import *
 parser = argparse.ArgumentParser(description='Parameter Processing')
 
 # new arguments
+parser.add_argument('--max_iter', type=int, default=100, help='# of max iterations in Adversarialdeepfool')
 parser.add_argument('--n_drop', type=int, default=10, help='# of drop out')
 parser.add_argument('--eps', type=int, default=0.05, help='The size of the perturbation at each iteration, representing the strength of the attack in AdversarialBIM')
 # Basic arguments

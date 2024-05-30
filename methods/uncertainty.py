@@ -5,7 +5,7 @@ import numpy as np
 class Uncertainty(ALMethod):
     def __init__(self, args, models, unlabeled_dst, U_index, selection_method="CONF", **kwargs):
         super().__init__(args, models, unlabeled_dst, U_index, **kwargs)
-        selection_choices = ["CONF", "Entropy", "Margin", "MeanSTD", "AdversarialBIM"]
+        selection_choices = ["CONF", "Entropy", "Margin", "MeanSTD", "AdversarialBIM","Adversarialdeepfool", "BALDDropout", "VarRatio"]
         if selection_method not in selection_choices:
             raise NotImplementedError("Selection algorithm unavailable.")
         self.selection_method = selection_method
@@ -28,10 +28,15 @@ class Uncertainty(ALMethod):
             inputs = data[0].to(self.args.device)
             if i % self.args.print_freq == 0:
                 print("| Selecting for batch [%3d/%3d]" % (i + 1, batch_num))
+
             if self.selection_method == "AdversarialBIM":
                 self.models['backbone'].train()
                 self.models['backbone'] = self.models['backbone'].to(self.args.device)
                 scores = np.append(scores, self.cal_dis_bim(inputs).cpu().numpy())
+            elif self.selection_method == "Adversarialdeepfool":
+                self.models['backbone'].train()
+                self.models['backbone'] = self.models['backbone'].to(self.args.device)
+                scores = np.append(scores, self.cal_dis_deepfool(inputs).cpu().detach().numpy())
             else:
                 with torch.no_grad():
                     if self.selection_method == "CONF":
@@ -43,7 +48,7 @@ class Uncertainty(ALMethod):
                         preds = torch.nn.functional.softmax(preds, dim=1).cpu().numpy()
                         entropys = (np.log(preds + 1e-6) * preds).sum(axis=1)
                         scores = np.append(scores, entropys)
-                    elif self.selection_method == 'Margin':
+                    elif self.selection_method == "Margin":
                         preds, _ = self.models['backbone'](inputs)
                         preds = torch.nn.functional.softmax(preds, dim=1)
                         preds_argmax = torch.argmax(preds, dim=1)
@@ -52,6 +57,13 @@ class Uncertainty(ALMethod):
                         preds_sub_argmax = torch.argmax(preds, dim=1)
                         margins = (max_preds - preds[torch.ones(preds.shape[0], dtype=bool), preds_sub_argmax]).cpu().numpy()
                         scores = np.append(scores, margins)
+                    elif self.selection_method == "VarRatio":
+                        preds, _ = self.models['backbone'](inputs)
+                        preds = torch.nn.functional.softmax(preds, dim=1)
+                        preds = torch.max(preds, 1)[0]
+                        uncertainties = 1.0 - preds
+                        uncertainties_np = uncertainties.cpu().numpy()
+                        scores= np.append(scores, uncertainties_np)
 
         if self.selection_method == "MeanSTD":
             probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
@@ -62,6 +74,15 @@ class Uncertainty(ALMethod):
             # sigma_c = np.std(probs, axis=0)
             uncertainties = np.mean(sigma_c, axis=-1)
             scores = np.append(scores, uncertainties)
+        elif self.selection_method == "BALDDropout":
+            probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
+            pb = probs.mean(0)
+            entropy1 = (-pb*torch.log(pb)).sum(1)
+            entropy2 = (-probs*torch.log(probs)).sum(2).mean(0)
+            uncertainties = entropy2 - entropy1
+            # 将Tensor转移到CPU并转换为NumPy数组
+            uncertainties_np = uncertainties.cpu().numpy()
+            scores= np.append(scores, uncertainties_np)
 
         return scores
 
@@ -139,3 +160,56 @@ class Uncertainty(ALMethod):
             nx.grad.data.zero_()
 
         return (eta * eta).sum()
+
+    def cal_dis_deepfool(self, nx):
+        nx.requires_grad_()
+        eta = torch.zeros(nx.shape, device=self.args.device)   # 修改为使用 zeros_like 以自动匹配形状
+
+        out, _ = self.models['backbone'](nx + eta)
+        py = out.max(1)[1]  # 移除item()，py现在是一个包含批次中所有样本预测类别的张量
+        ny = out.max(1)[1]  # 同上，ny为批次形式
+
+        i_iter = 0
+        max_iter = self.args.max_iter  # 假设max_iter是一个实例变量
+
+        while (py == ny).all() and i_iter < max_iter:  # 修改条件检查，确保所有样本满足条件
+            for i in range(nx.size(0)):  # 逐个处理批次中的样本
+                out[i, py[i]].backward(retain_graph=True) if i == nx.size(0) - 1 else out[i, py[i]].backward(retain_graph=True, create_graph=True)
+                grad_np = nx.grad.data.clone()
+                nx.grad.data.zero_()
+
+                for j in range(out.shape[1]):  # 遍历所有类别
+                    if j == py[i]:
+                        continue
+                    out[i, j].backward(retain_graph=True) if j == out.shape[1] - 1 else out[i, j].backward(retain_graph=True, create_graph=True)
+                    grad_i = nx.grad.data.clone()
+                    nx.grad.data.zero_()
+
+                    wi = grad_i - grad_np
+                    fi = out[i, j] - out[i, py[i]]
+                    value_l = torch.full((nx.size(0),), float('inf'), device=nx.device)
+                    value_i = torch.abs(fi) / torch.norm(wi.flatten())
+
+                    # 以下部分需要确保在批量更新中正确处理
+                    if (value_i < value_l).any():
+                        ri = (value_i / torch.norm(wi.flatten())) * wi
+                        # print(ri.shape)
+                        # print(eta.shape)
+                        #  ri = ri.unsqueeze(0)  # 若x本身已经是批量形式，可以去除这行
+                        eta += ri.clone()  # 更新扰动，注意针对每个样本单独更新
+
+            nx.grad.data.zero_()
+            out, _ = self.models['backbone'](nx + eta)
+            py = out.max(1)[1]
+            i_iter += 1
+
+        return (eta * eta).sum()
+
+
+
+
+
+
+
+
+
