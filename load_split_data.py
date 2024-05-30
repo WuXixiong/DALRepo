@@ -95,10 +95,22 @@ def get_dataset(args, trial):
     # class-split
     if args.dataset == 'CIFAR10':
         args.input_size = 32 * 32 * 3
-        args.target_lists = [[4, 2, 5, 7], [7, 1, 2, 5], [6, 4, 3, 2], [8, 9, 1, 3], [2, 9, 5, 3]] # Randomly Selected
-        args.target_list = args.target_lists[trial]
+        # args.target_lists = [[4, 2, 5, 7], [7, 1, 2, 5], [6, 4, 3, 2], [8, 9, 1, 3], [2, 9, 5, 3]] # Randomly Selected
+        # args.target_list = args.target_lists[trial]
+        # args.untarget_list = list(np.setdiff1d(list(range(0, 10)), list(args.target_list)))
+        # args.num_IN_class = 4
+        if args.closeset:
+            # Settings specific to when openset is True
+            args.target_lists = [[4, 2, 5, 7], [7, 1, 2, 5], [6, 4, 3, 2], [8, 9, 1, 3], [2, 9, 5, 3]]
+            args.target_list = args.target_lists[trial]
+            args.num_IN_class = 4
+        else:
+            # Settings specific to when openset is False
+            args.target_list = list(range(10))  # Assuming you want all classes
+            args.num_IN_class = 10
+
+        # Calculate untarget_list outside the openset condition if it applies in both scenarios
         args.untarget_list = list(np.setdiff1d(list(range(0, 10)), list(args.target_list)))
-        args.num_IN_class = 4
     elif args.dataset == 'CIFAR100':
         args.input_size = 32 * 32 * 3
         args.target_lists = [[69,  8, 86, 18, 68, 30, 75,  3, 63, 76, 72,  7, 50, 81, 46, 89, 22,
@@ -206,17 +218,28 @@ def get_sub_train_dataset(args, dataset, L_index, O_index, U_index, Q_index, ini
 
     if initial:
         if args.dataset in ['CIFAR10', 'CIFAR100']:
-            L_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] < len(classes)]
-            O_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] >= len(classes)]
+            if args.closeset:
+                L_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] < len(classes)]
+                O_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] >= len(classes)]
 
-            n_ood = round(len(L_total) * (ood_rate / (1 - ood_rate)))
-            O_total = random.sample(O_total, n_ood)
-            print("# Total in: {}, ood: {}".format(len(L_total), len(O_total)))
+                n_ood = round(len(L_total) * (ood_rate / (1 - ood_rate)))
+                O_total = random.sample(O_total, n_ood)
+                print("# Total in: {}, ood: {}".format(len(L_total), len(O_total)))
 
-            L_index = random.sample(L_total, int(budget * (1 - ood_rate)))
-            O_index = random.sample(O_total, int(budget * ood_rate))
-            U_index = list(set(L_total + O_total) - set(L_index) - set(O_index))
-            print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), len(O_index), len(U_index)))
+                L_index = random.sample(L_total, int(budget * (1 - ood_rate)))
+                O_index = random.sample(O_total, int(budget * ood_rate))
+                U_index = list(set(L_total + O_total) - set(L_index) - set(O_index))
+                print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), len(O_index), len(U_index)))
+            else:
+                L_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] < len(classes)]
+                O_total = []
+                n_ood = 0
+                print("# Total in: {}, ood: {}".format(len(L_total), len(O_total)))
+
+                L_index = random.sample(L_total, int(budget * (1 - ood_rate)))
+                U_index = list(set(L_total) - set(L_index))
+                print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), 0, len(U_index)))
+
         elif args.dataset == 'ImageNet50':
             # TODO: long time takes
             if initial:
