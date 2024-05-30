@@ -5,7 +5,8 @@ import numpy as np
 class Uncertainty(ALMethod):
     def __init__(self, args, models, unlabeled_dst, U_index, selection_method="CONF", **kwargs):
         super().__init__(args, models, unlabeled_dst, U_index, **kwargs)
-        selection_choices = ["CONF", "Entropy", "Margin", "MeanSTD", "AdversarialBIM","Adversarialdeepfool", "BALDDropout", "VarRatio"]
+        selection_choices = ["CONF", "Entropy", "Margin", "MeanSTD", "AdversarialBIM","Adversarialdeepfool", "BALDDropout", "VarRatio", "MarginDropout",
+                             "CONFDropout", "EntropyDropout"]
         if selection_method not in selection_choices:
             raise NotImplementedError("Selection algorithm unavailable.")
         self.selection_method = selection_method
@@ -58,12 +59,15 @@ class Uncertainty(ALMethod):
                         margins = (max_preds - preds[torch.ones(preds.shape[0], dtype=bool), preds_sub_argmax]).cpu().numpy()
                         scores = np.append(scores, margins)
                     elif self.selection_method == "VarRatio":
+                        # 这里，以及其他计算出uncertainty方法的地方，可能需要修改。
                         preds, _ = self.models['backbone'](inputs)
                         preds = torch.nn.functional.softmax(preds, dim=1)
                         preds = torch.max(preds, 1)[0]
                         uncertainties = 1.0 - preds
-                        uncertainties_np = uncertainties.cpu().numpy()
+                        uncertainties_np = -uncertainties.cpu().numpy()  # 取负
                         scores= np.append(scores, uncertainties_np)
+                    elif self.selection_method == "LossPrediction":
+                        _, feature = self.models['backbone'](inputs)
 
         if self.selection_method == "MeanSTD":
             probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
@@ -73,7 +77,8 @@ class Uncertainty(ALMethod):
             sigma_c = np.std(probs_np, axis=0)
             # sigma_c = np.std(probs, axis=0)
             uncertainties = np.mean(sigma_c, axis=-1)
-            scores = np.append(scores, uncertainties)
+            uncertainties_np = -uncertainties # 取负
+            scores = np.append(scores, uncertainties_np)
         elif self.selection_method == "BALDDropout":
             probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
             pb = probs.mean(0)
@@ -81,8 +86,23 @@ class Uncertainty(ALMethod):
             entropy2 = (-probs*torch.log(probs)).sum(2).mean(0)
             uncertainties = entropy2 - entropy1
             # 将Tensor转移到CPU并转换为NumPy数组
-            uncertainties_np = uncertainties.cpu().numpy()
+            uncertainties_np = -uncertainties.cpu().numpy()  # 取负
             scores= np.append(scores, uncertainties_np)
+        elif self.selection_method == "MarginDropout":
+            probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
+            probs_sorted, _ = probs.sort(descending=True)
+            uncertainties = probs_sorted[:, 0] - probs_sorted[:,1]
+            uncertainties_np = -uncertainties.cpu().numpy()  # 取负
+            scores= np.append(scores, uncertainties_np)
+        elif self.selection_method == "CONFDropout":
+            probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
+            confs = probs.max(axis=1).values.cpu().numpy()
+            scores = np.append(scores, confs)
+        elif self.selection_method == "EntropyDropout":
+            preds = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
+            preds = torch.nn.functional.softmax(preds, dim=1).cpu().numpy()
+            entropys = (np.log(preds + 1e-6) * preds).sum(axis=1)
+            scores = np.append(scores, entropys)
 
         return scores
 
@@ -166,14 +186,14 @@ class Uncertainty(ALMethod):
         eta = torch.zeros(nx.shape, device=self.args.device)   # 修改为使用 zeros_like 以自动匹配形状
 
         out, _ = self.models['backbone'](nx + eta)
-        py = out.max(1)[1]  # 移除item()，py现在是一个包含批次中所有样本预测类别的张量
-        ny = out.max(1)[1]  # 同上，ny为批次形式
+        py = out.max(1)[1]  
+        ny = out.max(1)[1]  
 
         i_iter = 0
         max_iter = self.args.max_iter  # 假设max_iter是一个实例变量
 
         while (py == ny).all() and i_iter < max_iter:  # 修改条件检查，确保所有样本满足条件
-            for i in range(nx.size(0)):  # 逐个处理批次中的样本
+            for i in range(nx.size(0)): 
                 out[i, py[i]].backward(retain_graph=True) if i == nx.size(0) - 1 else out[i, py[i]].backward(retain_graph=True, create_graph=True)
                 grad_np = nx.grad.data.clone()
                 nx.grad.data.zero_()
@@ -190,13 +210,11 @@ class Uncertainty(ALMethod):
                     value_l = torch.full((nx.size(0),), float('inf'), device=nx.device)
                     value_i = torch.abs(fi) / torch.norm(wi.flatten())
 
-                    # 以下部分需要确保在批量更新中正确处理
                     if (value_i < value_l).any():
                         ri = (value_i / torch.norm(wi.flatten())) * wi
                         # print(ri.shape)
                         # print(eta.shape)
-                        #  ri = ri.unsqueeze(0)  # 若x本身已经是批量形式，可以去除这行
-                        eta += ri.clone()  # 更新扰动，注意针对每个样本单独更新
+                        eta += ri.clone()  # 更新扰动
 
             nx.grad.data.zero_()
             out, _ = self.models['backbone'](nx + eta)
