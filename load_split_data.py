@@ -99,7 +99,7 @@ def get_dataset(args, trial):
         # args.target_list = args.target_lists[trial]
         # args.untarget_list = list(np.setdiff1d(list(range(0, 10)), list(args.target_list)))
         # args.num_IN_class = 4
-        if args.closeset:
+        if args.openset:
             # Settings specific to when openset is True
             args.target_lists = [[4, 2, 5, 7], [7, 1, 2, 5], [6, 4, 3, 2], [8, 9, 1, 3], [2, 9, 5, 3]]
             args.target_list = args.target_lists[trial]
@@ -218,7 +218,7 @@ def get_sub_train_dataset(args, dataset, L_index, O_index, U_index, Q_index, ini
 
     if initial:
         if args.dataset in ['CIFAR10', 'CIFAR100']:
-            if args.closeset:
+            if args.openset:
                 L_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] < len(classes)]
                 O_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] >= len(classes)]
 
