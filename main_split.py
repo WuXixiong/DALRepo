@@ -90,8 +90,10 @@ if __name__ == '__main__':
                                   selection_method=args.uncertainty,
                                   dataloaders=dataloaders,
                                   cur_cycle=cycle)
-
-            ALmethod = methods.__dict__[args.method](args, models, unlabeled_dst, U_index, **selection_args)
+            if args.method=="VAAL":
+                ALmethod = methods.__dict__[args.method](args, models, train_dst, unlabeled_dst, U_index, **selection_args)
+            else:
+                ALmethod = methods.__dict__[args.method](args, models, unlabeled_dst, U_index, **selection_args)
             Q_index, Q_scores = ALmethod.select()
 
             # Update Indices

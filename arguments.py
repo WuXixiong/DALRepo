@@ -43,7 +43,7 @@ parser.add_argument("--step_size", type=float, default=50, help="Step size for S
 parser.add_argument('--milestone', type=list, default=[100, 150], metavar='M', help='Milestone for MultiStepLR')
 parser.add_argument('--warmup', type=int, default=10, metavar='warmup', help='warmup epochs')
 
-# Training
+# ing
 parser.add_argument('--epochs', default=200, type=int, help='number of total epochs to run')
 parser.add_argument('--epoch-loss', default=120, type=int, help='number of epochs for training loss module in LL')
 parser.add_argument('--epochs-ccal', default=700, type=int, help='number of epochs for training contrastive coders in CCAL')
