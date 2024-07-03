@@ -223,6 +223,8 @@ def get_sub_train_dataset(args, dataset, L_index, O_index, U_index, Q_index, ini
                 O_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] >= len(classes)]
 
                 n_ood = round(len(L_total) * (ood_rate / (1 - ood_rate)))
+                if args.imbalanceset and n_ood > O_total:
+                    n_ood = O_total
                 O_total = random.sample(O_total, n_ood)
                 print("# Total in: {}, ood: {}".format(len(L_total), len(O_total)))
 
