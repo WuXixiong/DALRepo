@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
 
+import torchvision.models as torchmodels
 
 class View(nn.Module):
     def __init__(self, size):
@@ -106,17 +107,7 @@ class Discriminator(nn.Module):
 
     def forward(self, z):
         return self.net(z)
-
-
-# def kaiming_init(m):
-#     if isinstance(m, (nn.Linear, nn.Conv2d)):
-#         init.kaiming_normal(m.weight)
-#         if m.bias is not None:
-#             m.bias.data.fill_(0)
-#     elif isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
-#         m.weight.data.fill_(1)
-#         if m.bias is not None:
-#             m.bias.data.fill_(0)
+    
 
 def kaiming_init(m):
     if isinstance(m, (nn.Linear, nn.Conv2d)):
@@ -138,3 +129,22 @@ def normal_init(m, mean, std):
         m.weight.data.fill_(1)
         if m.bias.data is not None:
             m.bias.data.zero_()
+
+class FEA(nn.Module):
+	def __init__(self, dim = 28 * 28, pretrained=False, num_classes = 10):
+		super().__init__()
+		resnet18 = torchmodels.resnet18(pretrained=pretrained)
+		self.features = nn.Sequential(*list(resnet18.children())[:-1])
+		self.features[0] = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+		self.classifier = nn.Linear(512,num_classes)
+		self.dim = resnet18.fc.in_features
+		
+	
+	def forward(self, x):
+		feature  = self.features(x)
+		#print(x)s
+		x = feature.view(feature.size(0), -1)
+		return x
+	
+	def get_embedding_dim(self):
+		return self.dim

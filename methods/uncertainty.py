@@ -222,12 +222,4 @@ class Uncertainty(ALMethod):
             i_iter += 1
 
         return (eta * eta).sum()
-
-
-
-
-
-
-
-
-
+    

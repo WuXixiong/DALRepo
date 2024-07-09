@@ -8,3 +8,4 @@ from .similar import *
 from .mqnet import *
 from .random import *
 from .vaal import *
+from .WAAL import *

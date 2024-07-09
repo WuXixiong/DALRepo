@@ -37,7 +37,7 @@ class VAAL(ALMethod):
         super().__init__(args, models, unlabeled_dst, U_index, **kwargs)
             # backbone = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device)
         self.net_vae = nets.vae.VAE()
-        self.net_dis = nets.vae.Discriminator()
+        self.net_dis = nets.vae.Discriminator(z_dim=32)
 
     def run(self):
         self.train_vaal()

@@ -11,6 +11,7 @@ parser.add_argument('--n_drop', type=int, default=10, help='# of drop out')
 parser.add_argument('--eps', type=int, default=0.05, help='The size of the perturbation at each iteration, representing the strength of the attack in AdversarialBIM')
 parser.add_argument('--openset', action='store_true', default=False, help='Whether to use openset')
 parser.add_argument('--imbalanceset', action='store_true', default=False, help='Whether to use imbalanceset')
+parser.add_argument('--waal_selection', type=int, default=10, help='# selections in WAAL')
 
 # Basic arguments
 parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset') #CIFAR10, CIFAR100, ImageNet50
