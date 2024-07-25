@@ -51,7 +51,7 @@ class VAAL(ALMethod):
         selected_indices, scores = self.run()
         # print("Length of U_index:", len(self.U_index)) # HERE IS 49600
         # print("Selected indices:", selected_indices) # HERE EXISTS SOME INDICES LARGER THAN 49600
-        selected_indices = selected_indices[selected_indices <= len(self.U_index)] # TEMP SOLUTION
+        selected_indices = selected_indices[selected_indices < len(self.U_index)] # TEMP SOLUTION
         Q_index = [self.U_index[idx] for idx in selected_indices]
 
         return Q_index, scores

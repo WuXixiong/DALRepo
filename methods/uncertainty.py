@@ -59,7 +59,6 @@ class Uncertainty(ALMethod):
                         margins = (max_preds - preds[torch.ones(preds.shape[0], dtype=bool), preds_sub_argmax]).cpu().numpy()
                         scores = np.append(scores, margins)
                     elif self.selection_method == "VarRatio":
-                        # 这里，以及其他计算出uncertainty方法的地方，可能需要修改。
                         preds, _ = self.models['backbone'](inputs)
                         preds = torch.nn.functional.softmax(preds, dim=1)
                         preds = torch.max(preds, 1)[0]

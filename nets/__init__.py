@@ -7,3 +7,4 @@ from .lossnet import *
 from .querynet import *
 
 from .vae import *
+from .tdnet import *

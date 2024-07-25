@@ -9,3 +9,5 @@ from .mqnet import *
 from .random import *
 from .vaal import *
 from .WAAL import *
+from .epig import *
+from .tidal import *

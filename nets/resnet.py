@@ -94,17 +94,21 @@ class ResNet_32x32(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x, method=None):
         with set_grad_enabled(not self.no_grad):
             out = F.relu(self.bn1(self.conv1(x)))
-            out = self.layer1(out)
-            out = self.layer2(out)
-            out = self.layer3(out)
-            out = self.layer4(out)
-            out = F.avg_pool2d(out, 4)
+            out1 = self.layer1(out)
+            out2 = self.layer2(out1)
+            out3 = self.layer3(out2)
+            out4 = self.layer4(out3)
+            out = F.avg_pool2d(out4, 4)
             out_cnn = out.view(out.size(0), -1)
             out = self.embedding_recorder(out_cnn)
             out = self.linear(out)
+
+            if method=='TIDAL':
+                return out, out_cnn, [out1, out2, out3, out4]
+
         return out, out_cnn
 
     def get_embedding_dim(self):
@@ -124,7 +128,7 @@ class ResNet_224x224(resnet.ResNet):
     def get_last_layer(self):
         return self.fc
 
-    def _forward_impl(self, x: Tensor) -> Tensor:
+    def _forward_impl(self, x: Tensor, method=None) -> Tensor:
         # See note [TorchScript super()]
         with set_grad_enabled(not self.no_grad):
             x = self.conv1(x)
@@ -132,15 +136,18 @@ class ResNet_224x224(resnet.ResNet):
             x = self.relu(x)
             x = self.maxpool(x)
 
-            x = self.layer1(x)
-            x = self.layer2(x)
-            x = self.layer3(x)
-            x = self.layer4(x)
+            x1 = self.layer1(x)
+            x2 = self.layer2(x1)
+            x3 = self.layer3(x2)
+            x4 = self.layer4(x3)
 
-            x = self.avgpool(x)
+            x = self.avgpool(x4)
             out_cnn = flatten(x, 1)
             x = self.embedding_recorder(out_cnn)
             x = self.fc(x)
+
+            if method=='TIDAL':
+                return x, out_cnn, [x1, x2, x3, x4]
 
         return x, out_cnn
 
@@ -212,6 +219,7 @@ def ResNet(arch: str, channel: int, num_classes: int, im_size, record_embedding:
         elif arch == "resnet152":
             net = ResNet_32x32(Bottleneck, [3, 8, 36, 3], channel=channel, num_classes=num_classes,
                                record_embedding=record_embedding, no_grad=no_grad)
+            
         else:
             raise ValueError("Model architecture not found.")
     else:
