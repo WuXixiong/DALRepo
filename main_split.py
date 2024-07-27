@@ -1,6 +1,7 @@
 # Python
 import os
 import time
+import datetime
 import random
 
 # Torch
@@ -58,6 +59,10 @@ if __name__ == '__main__':
         # Active learning
         logs = []
         models = None
+
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logs.append("This experiment time is:")
+        logs.append(current_time)
         for cycle in range(args.cycle):
             print("====================Cycle: {}====================".format(cycle + 1))
             # Model (re)initialization
@@ -126,6 +131,10 @@ if __name__ == '__main__':
         file_name = 'logs/'+str(args.dataset)+'/r'+str(args.ood_rate)+'_t'+str(trial)+'_'+str(args.method)
         if args.method == 'MQNet':
             file_name = file_name+'_'+str(args.mqnet_mode)+'_v3_b64'
+        
+        if args.method == 'Uncertainty':
+            file_name = file_name+'_'+str(args.uncertainty)
+
         np.savetxt(file_name, logs, fmt='%.4f', delimiter=',')
 
         # Ensure the directory exists before saving the file
