@@ -7,6 +7,7 @@ class Uncertainty(ALMethod):
         super().__init__(args, models, unlabeled_dst, U_index, **kwargs)
         selection_choices = ["CONF", "Entropy", "Margin", "MeanSTD", "AdversarialBIM","Adversarialdeepfool", "BALDDropout", "VarRatio", "MarginDropout",
                              "CONFDropout", "EntropyDropout"]
+        # Adversarialdeepfool 还不能用。
         if selection_method not in selection_choices:
             raise NotImplementedError("Selection algorithm unavailable.")
         self.selection_method = selection_method

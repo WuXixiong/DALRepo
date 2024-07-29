@@ -331,23 +331,39 @@ def train_epoch(args, models, criterion, optimizers, dataloaders):
     models['backbone'].train()
 
     batch_idx = 0
-    while(batch_idx < args.steps_per_epoch):
-        for data in dataloaders['train']:
-            inputs, labels = data[0].to(args.device), data[1].to(args.device)
+    # while(batch_idx < args.steps_per_epoch):
+        # for data in dataloaders['train']:
+        #     inputs, labels = data[0].to(args.device), data[1].to(args.device)
 
-            optimizers['backbone'].zero_grad()
+        #     optimizers['backbone'].zero_grad()
 
-            scores, features = models['backbone'](inputs)
-            target_loss = criterion(scores, labels)
-            m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
+        #     scores, features = models['backbone'](inputs)
+        #     target_loss = criterion(scores, labels)
+        #     m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
 
-            loss = m_backbone_loss
-            loss.backward()
-            optimizers['backbone'].step()
+        #     loss = m_backbone_loss
+        #     loss.backward()
+        #     optimizers['backbone'].step()
 
-            batch_idx+=1
+        #     batch_idx+=1
             #if batch_idx >= steps_per_epoch:
             #    break
+    for data in dataloaders['train']:
+        inputs, labels = data[0].to(args.device), data[1].to(args.device)
+
+        optimizers['backbone'].zero_grad()
+
+        scores, _ = models['backbone'](inputs)
+        target_loss = criterion(scores, labels)
+        m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
+
+        loss = m_backbone_loss
+        loss.backward()
+        optimizers['backbone'].step()
+
+        batch_idx+=1
+        # if batch_idx >= args.steps_per_epoch:
+        #     break
 
 def train(args, models, criterion, optimizers, schedulers, dataloaders):
     print('>> Train a Model.')

@@ -213,7 +213,8 @@ def get_subclass_dataset(dataset, classes):
 
 def get_sub_train_dataset(args, dataset, L_index, O_index, U_index, Q_index, initial= False):
     classes = args.target_list
-    budget = args.n_query
+    #budget = args.n_query
+    budget = args.n_initial
     ood_rate = args.ood_rate
 
     if initial:
@@ -228,17 +229,20 @@ def get_sub_train_dataset(args, dataset, L_index, O_index, U_index, Q_index, ini
                 O_total = random.sample(O_total, n_ood)
                 print("# Total in: {}, ood: {}".format(len(L_total), len(O_total)))
 
-                L_index = random.sample(L_total, int(budget * (1 - ood_rate)))
-                O_index = random.sample(O_total, int(budget * ood_rate))
+                # L_index = random.sample(L_total, int(budget * (1 - ood_rate)))
+                # O_index = random.sample(O_total, int(budget * ood_rate))
+                L_index = random.sample(L_total, int(budget))
+                O_index = random.sample(O_total, int(budget * (ood_rate / (1-ood_rate)))) # ensure the initial labelled data and initial ood data are in correct ratio
                 U_index = list(set(L_total + O_total) - set(L_index) - set(O_index))
                 print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), len(O_index), len(U_index)))
             else:
+                ood_rate = 0
                 L_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] < len(classes)]
                 O_total = []
                 n_ood = 0
                 print("# Total in: {}, ood: {}".format(len(L_total), len(O_total)))
 
-                L_index = random.sample(L_total, int(budget * (1 - ood_rate)))
+                L_index = random.sample(L_total, int(budget))
                 U_index = list(set(L_total) - set(L_index))
                 print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), 0, len(U_index)))
 
@@ -270,6 +274,8 @@ def get_sub_train_dataset(args, dataset, L_index, O_index, U_index, Q_index, ini
         print("# query in: {}, ood: {}".format(len(in_Q_index), len(ood_Q_index)))
 
         L_index = L_index + in_Q_index
+        print("# Now labelled in: {}".format(len(L_index)))
+        
         O_index = O_index + ood_Q_index
         U_index = list(set(U_index) - set(Q_index))
         return L_index, O_index, U_index, len(in_Q_index)

@@ -58,11 +58,14 @@ if __name__ == '__main__':
 
         # Active learning
         logs = []
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logs.append(["This experiment time is:"])
+        logs.append([current_time])
+        logs.append([])
+        logs.append(['Test Accuracy', 'Number of in-domain query data'])
+
         models = None
 
-        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logs.append("This experiment time is:")
-        logs.append(current_time)
         for cycle in range(args.cycle):
             print("====================Cycle: {}====================".format(cycle + 1))
             # Model (re)initialization
@@ -125,7 +128,9 @@ if __name__ == '__main__':
             logs.append([acc, in_cnt])
 
         print("====================Logs, Trial {}====================".format(trial + 1))
-        logs = np.array(logs).reshape((-1, 2))
+        # logs = np.array(logs).reshape((-1, 2))
+        logs = [logs[i:i+2] for i in range(0, len(logs), 2)]
+        # logs = logs.tolist() # convert back to list to append more information
         print(logs, flush=True)
 
         file_name = 'logs/'+str(args.dataset)+'/r'+str(args.ood_rate)+'_t'+str(trial)+'_'+str(args.method)
@@ -135,11 +140,21 @@ if __name__ == '__main__':
         if args.method == 'Uncertainty':
             file_name = file_name+'_'+str(args.uncertainty)
 
-        np.savetxt(file_name, logs, fmt='%.4f', delimiter=',')
+        # np.savetxt(file_name, logs, fmt='%.4f', delimiter=',')
 
         # Ensure the directory exists before saving the file
         directory = os.path.dirname(file_name)
         if not os.path.exists(directory):
             os.makedirs(directory)
 
-        np.savetxt(file_name, logs, fmt='%.4f', delimiter=',')
+        # np.savetxt(file_name, logs, fmt='%.4f', delimiter=',')
+        with open(file_name, 'w') as file:
+            for entry in logs:
+                if all(isinstance(sub, list) for sub in entry):  # 检查是否每个子条目都是列表
+                    for sub_entry in entry:
+                        if all(isinstance(x, (int, float)) for x in sub_entry):  # 检查是否为数字列表
+                            file.write('|'.join(f'{x:.4f}' for x in sub_entry) + '\n')
+                        else:
+                            file.write('|'.join(str(x) for x in sub_entry) + '\n')
+                else:
+                    file.write(' '.join(str(x) for x in entry) + '\n')

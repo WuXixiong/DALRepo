@@ -15,6 +15,7 @@ parser.add_argument('--waal_selection', type=int, default=10, help='# selections
 parser.add_argument('--tidal_query', type=str, default='Entropy', help='query method of TiDal')
 
 # Basic arguments
+parser.add_argument('--n-initial', type=int, default=100, help='# of initial labelled samples')
 parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset') #CIFAR10, CIFAR100, ImageNet50
 parser.add_argument('--data_path', type=str, default='data', help='dataset path')
 parser.add_argument('--gpu', default=[0], nargs="+", type=int, help='GPU id to use')
