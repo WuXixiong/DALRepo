@@ -1,14 +1,24 @@
+"""
+Cl = number of classes
+K = number of model samples
+N_p = number of pool examples
+N_t = number of target examples
+"""
 from .almethod import ALMethod
 import torch
 import numpy as np
 from tqdm import tqdm
+from torch.utils.data.sampler import SubsetRandomSampler
+import random
 
 class EPIG(ALMethod):
-    def __init__(self, args, models, unlabeled_dst, U_index, **kwargs):
+    def __init__(self, args, models, target_loader, unlabeled_dst, U_index, **kwargs):
+        self.target_loader = target_loader # deal with addititonal arguments
         super().__init__(args, models, unlabeled_dst, U_index, **kwargs)
 
     def select(self, **kwargs):
         scores = self.rank_uncertainty()
+        scores = scores.cpu().numpy()
         selected_indices = np.argsort(scores)[:self.args.n_query]
         Q_index = [self.U_index[idx] for idx in selected_indices]
 
@@ -16,24 +26,60 @@ class EPIG(ALMethod):
 
     def rank_uncertainty(self):
         self.models['backbone'].eval()
-        selection_loader = torch.utils.data.DataLoader(self.unlabeled_set, batch_size=self.args.test_batch_size, num_workers=self.args.workers)
-
+        selected_uindex = random.sample(range(int(len(self.unlabeled_set)/10)), int(self.args.n_query)) 
+        sampler_unlabeled = SubsetRandomSampler(selected_uindex)  # make indices initial to the samples
+        selection_loader = torch.utils.data.DataLoader(self.unlabeled_set, sampler=sampler_unlabeled, batch_size=self.args.test_batch_size, num_workers=self.args.workers)
         scores = np.array([])
         batch_num = len(selection_loader)
-        print("| Calculating uncertainty of Unlabeled set")
-
-        probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
-        pb = probs.mean(0)
-        entropy1 = (-pb*torch.log(pb)).sum(1)
-        entropy2 = (-probs*torch.log(probs)).sum(2).mean(0)
-        uncertainties = entropy2 - entropy1
-        # 将Tensor转移到CPU并转换为NumPy数组
-        uncertainties_np = -uncertainties.cpu().numpy()  # 取负
-        scores= np.append(scores, uncertainties_np)
+        print("| Calculating probabilities of the unlabeled set")
+        # probs_pool = self.predict_prob_dropout_split(len(self.unlabeled_set), selection_loader, n_drop=self.args.n_drop)
+        probs_pool = self.predict_prob_dropout_split(int(len(self.unlabeled_set)/10), selection_loader, n_drop=self.args.n_drop)
+        print("| Calculating probabilities of the target set")
+        probs_target = self.predict_prob_dropout_split((int(self.args.n_class) * self.args.target_per_class), self.target_loader, n_drop=self.args.n_drop)
+        scores = self.conditional_epig_from_probs(probs_pool, probs_target)  # [N_p, N_t]
+        scores = torch.mean(scores, dim=-1)  # [N_p,]
 
         return scores
+    
+    def conditional_epig_from_probs(self, probs_pool, probs_targ):
+        """
+        EPIG(x|x_*) = I(y;y_*|x,x_*)
+                = KL[p(y,y_*|x,x_*) || p(y|x)p(y_*|x_*)]
+                = ∑_{y} ∑_{y_*} p(y,y_*|x,x_*) log(p(y,y_*|x,x_*) / p(y|x)p(y_*|x_*))
 
-    def predict_prob_dropout_split(self, to_predict_dataset, to_predict_dataloader, n_drop):
+        Arguments:
+        probs_pool: Tensor[float], [N_p, K, Cl]
+        probs_targ: Tensor[float], [N_t, K, Cl]
+
+        Returns:
+        Tensor[float], [N_p, N_t]
+        """
+        # Estimate the joint predictive distribution.
+        probs_pool = probs_pool.unsqueeze(2)  # [2, N_p, 1, Cl]
+        probs_targ = probs_targ.unsqueeze(1)  # [2, 1, N_t, Cl]
+        probs_joint = probs_pool * probs_targ  # [2, N_p, N_t, Cl]
+        probs_joint = probs_joint.sum(dim=0) # [N_p, N_t, Cl]
+        # probs_joint = torch.mean(probs_joint, dim=2)  # [N_p, N_t, Cl, Cl]
+
+    # Estimate the marginal predictive distributions.
+        probs_pool = probs_pool.mean(0)
+        probs_targ = probs_targ.mean(0)
+
+    # Estimate the product of the marginal predictive distributions.
+        probs_pool_targ_indep = probs_pool * probs_targ  # [N_p, N_t, Cl, Cl]
+
+    # Estimate the conditional expected predictive information gain for each pair of examples.
+    # This is the KL divergence between probs_joint and probs_joint_indep.
+        nonzero_joint = probs_joint > 0  # [N_p, N_t, Cl, Cl]
+        log_term = torch.clone(probs_joint)  # [N_p, N_t, Cl, Cl]
+        log_term[nonzero_joint] = torch.log(probs_joint[nonzero_joint])  # [N_p, N_t, Cl, Cl]
+        # probs_pool_targ_indep = probs_pool_targ_indep.permute(1, 2, 0, 3)  # 将维度排列成 [4890, 1000, 10, 10]
+        log_term[nonzero_joint] -= torch.log(probs_pool_targ_indep[nonzero_joint])  # [N_p, N_t, Cl, Cl]
+        scores = torch.sum(probs_joint * log_term, dim=-1)  # [N_p, N_t]
+
+        return scores  # [N_p, N_t]
+
+    def predict_prob_dropout_split(self, dataset_length, to_predict_dataloader, n_drop):
 
         # self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -43,7 +89,7 @@ class EPIG(ALMethod):
         self.models['backbone'] = self.models['backbone'].to(self.args.device)
 
         # Create a tensor to hold probabilities
-        probs = torch.zeros([n_drop, len(to_predict_dataset), len(self.args.target_list)]).to(self.args.device)
+        probs = torch.zeros([n_drop, dataset_length, len(self.args.target_list)]).to(self.args.device)
 
         # Create a dataloader object to load the dataset
         # to_predict_dataloader = torch.utils.data.DataLoader(to_predict_dataset, batch_size=self.args['batch_size'], shuffle=False)

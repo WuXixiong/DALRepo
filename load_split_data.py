@@ -95,6 +95,7 @@ def get_dataset(args, trial):
     # class-split
     if args.dataset == 'CIFAR10':
         args.input_size = 32 * 32 * 3
+        args.target_list = list(range(10))
         # args.target_lists = [[4, 2, 5, 7], [7, 1, 2, 5], [6, 4, 3, 2], [8, 9, 1, 3], [2, 9, 5, 3]] # Randomly Selected
         # args.target_list = args.target_lists[trial]
         # args.untarget_list = list(np.setdiff1d(list(range(0, 10)), list(args.target_list)))
@@ -168,12 +169,57 @@ def get_dataset(args, trial):
 
     unlabeled_set.targets = train_set.targets
 
+    # target set for EPIG
+    # if args.method == 'EPIG':
+    #     args.target_per_class = 1000
+
+    #     # 创建一个默认字典，用于存储每个类别对应的索引列表
+    #     category_indices = defaultdict(list)
+    #     targetset_index = []
+    #     # 遍历 train_set and test_set，收集每个类别对应的索引
+    #     for data in train_set:
+    #         category = data[1]
+    #         index = data[2]
+    #         category_indices[category].append(index)
+        
+    #     # 对于每个类别，从索引列表中随机选取 1000 个索引
+    #     targetset_index = []
+    #     for indices in category_indices.values():
+    #         if len(indices) > args.target_per_class:
+    #             targetset_index.extend(random.sample(indices, args.target_per_class))
+    #         else:
+    #             targetset_index.extend(indices)
+    #     targetset_index = set(targetset_index) # convert to set
+        # # 创建一个新的列表用于存储过滤后的 train_set
+        # new_train_set = []
+        # target_set = []
+
+        # # 遍历 train_set and test_set，将符合条件的元素添加到 target_set，不符合条件的元素添加到 new_train_set
+        # for data in train_set:
+        #     if data[2] in targetset_index:
+        #         target_set.append(data)
+        #     else:
+        #         new_train_set.append(data)
+        
+        # unlabeled_set = new_train_set
+        # train_set = new_train_set
+
+        # # convert back from list to dataset
+        # unlabeled_set = EPIGDataset(unlabeled_set)
+        # train_set = EPIGDataset(train_set)
+
     # Split Check
     print("Target classes: ", args.target_list)
     if args.dataset in ['CIFAR10', 'CIFAR100']:
-        uni, cnt = np.unique(np.array(unlabeled_set.targets), return_counts=True)
-        print("Train, # samples per class")
-        print(uni, cnt)
+        if args.method == 'EPIG':
+            uni, cnt = np.unique(np.array(unlabeled_set.targets), return_counts=True)
+            print("Train, # samples per class")
+            cnt -= args.target_per_class
+            print(uni, cnt)
+        else:    
+            uni, cnt = np.unique(np.array(unlabeled_set.targets), return_counts=True)
+            print("Train, # samples per class")
+            print(uni, cnt)
         uni, cnt = np.unique(np.array(test_set.targets), return_counts=True)
         print("Test, # samples per class")
         print(uni, cnt)
@@ -187,6 +233,10 @@ def get_dataset(args, trial):
         uni, cnt = np.unique(np.array(test_set.targets[args.in_test_indices]), return_counts=True)
         print("Test, # samples per class")
         print(uni, cnt)
+
+    # if args.method == 'EPIG':
+    #     return train_set, unlabeled_set, test_set, targetset_index
+    
     return train_set, unlabeled_set, test_set
 
 def get_superclass_list(dataset):
@@ -234,7 +284,10 @@ def get_sub_train_dataset(args, dataset, L_index, O_index, U_index, Q_index, ini
                 L_index = random.sample(L_total, int(budget))
                 O_index = random.sample(O_total, int(budget * (ood_rate / (1-ood_rate)))) # ensure the initial labelled data and initial ood data are in correct ratio
                 U_index = list(set(L_total + O_total) - set(L_index) - set(O_index))
-                print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), len(O_index), len(U_index)))
+                if args.method == 'EPIG':
+                    print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), len(O_index), len(U_index) - int(args.n_class) * args.target_per_class))
+                else:
+                    print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), len(O_index), len(U_index)))
             else:
                 ood_rate = 0
                 L_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] < len(classes)]
@@ -244,7 +297,10 @@ def get_sub_train_dataset(args, dataset, L_index, O_index, U_index, Q_index, ini
 
                 L_index = random.sample(L_total, int(budget))
                 U_index = list(set(L_total) - set(L_index))
-                print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), 0, len(U_index)))
+                if args.method == 'EPIG':
+                    print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), len(O_index), len(U_index) - int(args.n_class) * args.target_per_class))
+                else:
+                    print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), len(O_index), len(U_index)))
 
         elif args.dataset == 'ImageNet50':
             # TODO: long time takes

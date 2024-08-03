@@ -26,6 +26,8 @@ random.seed(0)
 torch.manual_seed(0)
 torch.backends.cudnn.deterministic = True
 
+from collections import defaultdict
+
 # Main
 if __name__ == '__main__':
     # Training settings
@@ -41,6 +43,28 @@ if __name__ == '__main__':
         # Initialize a labeled dataset by randomly sampling K=1,000 points from the entire dataset.
         I_index, O_index, U_index, Q_index = [], [], [], []
         I_index, O_index, U_index = get_sub_train_dataset(args, train_dst, I_index, O_index, U_index, Q_index, initial=True)
+        if args.method == 'EPIG':
+            # get the actual unlabelled dataset
+            filtered_dst = [element for element in unlabeled_dst if element[2] in U_index]
+            # create a dictory to store indices for each class
+            category_indices = defaultdict(list)
+            targetset_index = []
+            # Go through train_set and test_set，collect indices for each class
+            for data in filtered_dst:
+                category = data[1]
+                index = data[2]
+                category_indices[category].append(index)
+            # randomly choose args.target_per_class indices for each class
+            targetset_index = []
+            for indices in category_indices.values():
+                if len(indices) > args.target_per_class:
+                    targetset_index.extend(random.sample(indices, args.target_per_class))
+                else:
+                    targetset_index.extend(indices)
+            U_index = [item for item in U_index if item not in targetset_index]
+
+            sampler_target = SubsetRandomSampler(targetset_index)  # make indices initial to the target indices
+            target_loader = DataLoader(train_dst, sampler=sampler_target, batch_size=args.batch_size, num_workers=args.workers)
         test_I_index = get_sub_test_dataset(args, test_dst)
 
         # DataLoaders
@@ -100,6 +124,8 @@ if __name__ == '__main__':
                                   cur_cycle=cycle)
             if args.method=="VAAL":
                 ALmethod = methods.__dict__[args.method](args, models, train_dst, unlabeled_dst, U_index, **selection_args)
+            elif args.method=="EPIG":
+                ALmethod = methods.__dict__[args.method](args, models, target_loader, unlabeled_dst, U_index, **selection_args)
             else:
                 ALmethod = methods.__dict__[args.method](args, models, unlabeled_dst, U_index, **selection_args)
             Q_index, Q_scores = ALmethod.select()
