@@ -370,7 +370,7 @@ def train(args, models, criterion, optimizers, schedulers, dataloaders):
     print("num_epochs: {}, steps_per_epoch: {}, total_update: {}".format(
             args.epochs, args.steps_per_epoch, int(args.epochs*args.steps_per_epoch)) )
 
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'CCAL', 'SIMILAR', 'VAAL', 'WAAL', 'EPIG', 'TIDAL']:  # add new methods like VAAL
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'CCAL', 'SIMILAR', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB']:  # add new methods like VAAL
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
             train_epoch(args, models, criterion, optimizers, dataloaders)
             schedulers['backbone'].step()
@@ -496,7 +496,7 @@ def get_more_args(args):
 
 def get_models(args, nets, model, models):
     # Normal
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL']: # add VAAL
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB']: # add new methods
         backbone = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device)
         if args.device == "cpu":
             print("Using CPU.")
@@ -605,7 +605,7 @@ def get_optim_configurations(args, models):
         scheduler = torch.optim.lr_scheduler.__dict__[args.scheduler](optimizer)
 
     # Normal
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL']: # also add new methods
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB']: # also add new methods
         optimizers = {'backbone': optimizer}
         schedulers = {'backbone': scheduler}
 

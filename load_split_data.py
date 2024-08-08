@@ -73,6 +73,53 @@ def get_dataset(args, trial):
         train_set = MyCIFAR10(file_path, train=True, download=True, transform=train_transform)
         unlabeled_set = MyCIFAR10(file_path, train=True, download=True, transform=test_transform)
         test_set = MyCIFAR10(file_path, train=False, download=True, transform=test_transform)
+
+        num_classes = len(CIFAR10_SUPERCLASS)
+        # if args.imbalanceset:
+        #     # create long-tail distribution
+        #     imbalance_ratios = np.linspace(args.imb_ratio, 1, num_classes)
+        #     # imbalance_ratios = imbalance_ratios / imbalance_ratios.sum() * num_classes
+
+        #     # get index of each class
+        #     train_targets = np.array(train_set.targets)
+        #     train_idx_per_class = [np.where(train_targets == i)[0] for i in range(10)]
+
+        #     # resampling according to the indices
+        #     new_indices = []
+        #     print(imbalance_ratios)
+        #     for class_idx, class_indices in enumerate(train_idx_per_class):
+        #         n_samples = int(len(class_indices) * imbalance_ratios[class_idx])
+        #         print(n_samples)
+        #         new_indices.extend(np.random.choice(class_indices, n_samples, replace=False))
+            
+        #     new_test_indices = []
+        #     if args.imb_type == "same":
+        #         test_targets = np.array(test_set.targets)
+        #         test_idx_per_class = [np.where(test_targets == i)[0] for i in range(10)]
+
+        #         for class_idx, class_indices in enumerate(test_idx_per_class):
+        #             n_samples = int(len(class_indices) * imbalance_ratios[class_idx])
+        #             new_test_indices.extend(np.random.choice(class_indices, n_samples, replace=False))
+        #         imbalanced_test_set = Subset(test_targets, new_test_indices)
+        #         test_set = imbalanced_test_set
+        #     elif args.imb_type == "different":
+        #         imbalance_ratios = imbalance_ratios[::-1]  # 倒序处理
+        #         test_targets = np.array(test_set.targets)
+        #         test_idx_per_class = [np.where(test_targets == i)[0] for i in range(10)]
+
+        #         for class_idx, class_indices in enumerate(test_idx_per_class):
+        #             n_samples = int(len(class_indices) * imbalance_ratios[class_idx])
+        #             new_test_indices.extend(np.random.choice(class_indices, n_samples, replace=False))
+        #         imbalanced_test_set = Subset(test_targets, new_test_indices)
+        #         test_set = imbalanced_test_set
+
+        #     # 创建不平衡数据集
+        #     imbalanced_train_set = Subset(train_targets, new_indices)
+        #     imbalanced_unlabelled_set = Subset(train_targets, new_indices)
+        #     train_set = imbalanced_train_set
+        #     unlabeled_set = imbalanced_unlabelled_set
+
+
     elif args.dataset == 'CIFAR100':
         file_path = args.data_path + '/cifar100/'
         train_set = MyCIFAR100(file_path, train=True, download=True, transform=train_transform)
@@ -168,45 +215,6 @@ def get_dataset(args, trial):
             test_set.targets[idx] = class_covert_dict[test_set.targets[idx]]
 
     unlabeled_set.targets = train_set.targets
-
-    # target set for EPIG
-    # if args.method == 'EPIG':
-    #     args.target_per_class = 1000
-
-    #     # 创建一个默认字典，用于存储每个类别对应的索引列表
-    #     category_indices = defaultdict(list)
-    #     targetset_index = []
-    #     # 遍历 train_set and test_set，收集每个类别对应的索引
-    #     for data in train_set:
-    #         category = data[1]
-    #         index = data[2]
-    #         category_indices[category].append(index)
-        
-    #     # 对于每个类别，从索引列表中随机选取 1000 个索引
-    #     targetset_index = []
-    #     for indices in category_indices.values():
-    #         if len(indices) > args.target_per_class:
-    #             targetset_index.extend(random.sample(indices, args.target_per_class))
-    #         else:
-    #             targetset_index.extend(indices)
-    #     targetset_index = set(targetset_index) # convert to set
-        # # 创建一个新的列表用于存储过滤后的 train_set
-        # new_train_set = []
-        # target_set = []
-
-        # # 遍历 train_set and test_set，将符合条件的元素添加到 target_set，不符合条件的元素添加到 new_train_set
-        # for data in train_set:
-        #     if data[2] in targetset_index:
-        #         target_set.append(data)
-        #     else:
-        #         new_train_set.append(data)
-        
-        # unlabeled_set = new_train_set
-        # train_set = new_train_set
-
-        # # convert back from list to dataset
-        # unlabeled_set = EPIGDataset(unlabeled_set)
-        # train_set = EPIGDataset(train_set)
 
     # Split Check
     print("Target classes: ", args.target_list)
