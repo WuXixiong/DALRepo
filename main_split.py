@@ -122,7 +122,7 @@ if __name__ == '__main__':
                                   selection_method=args.uncertainty,
                                   dataloaders=dataloaders,
                                   cur_cycle=cycle)
-            if args.method=="VAAL":
+            if args.method in ["VAAL", "AlphaMixSampling"]:
                 ALmethod = methods.__dict__[args.method](args, models, train_dst, unlabeled_dst, U_index, **selection_args)
             elif args.method=="EPIG":
                 ALmethod = methods.__dict__[args.method](args, models, target_loader, unlabeled_dst, U_index, **selection_args)

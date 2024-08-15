@@ -16,6 +16,17 @@ parser.add_argument('--imb_ratio', type=float, default=0.1, help='The ratio of m
 parser.add_argument('--imb_type', type=str, default='uniform', help='The relation between trainset and testset in imbalanceset')
 parser.add_argument('--waal_selection', type=int, default=10, help='# selections in WAAL')
 parser.add_argument('--tidal_query', type=str, default='Entropy', help='query method of TiDal')
+# AlphaMix hyper-parameters
+parser.add_argument('--alpha_cap', type=float, default=0.03125)
+parser.add_argument('--alpha_opt', action="store_const", default=False, const=True)
+parser.add_argument('--alpha_closed_form_approx', action="store_const", default=False, const=True)
+parser.add_argument('--alpha_learning_rate', type=float, default=0.1,
+                        help='The learning rate of finding the optimised alpha')
+parser.add_argument('--alpha_clf_coef', type=float, default=1.0)
+parser.add_argument('--alpha_l2_coef', type=float, default=0.01)
+parser.add_argument('--alpha_learning_iters', type=int, default=5,
+                        help='The number of iterations for learning alpha')
+parser.add_argument('--alpha_learn_batch_size', type=int, default=1000000)
 
 # Basic arguments
 parser.add_argument('--n-initial', type=int, default=100, help='# of initial labelled samples')

@@ -74,52 +74,6 @@ def get_dataset(args, trial):
         unlabeled_set = MyCIFAR10(file_path, train=True, download=True, transform=test_transform)
         test_set = MyCIFAR10(file_path, train=False, download=True, transform=test_transform)
 
-        num_classes = len(CIFAR10_SUPERCLASS)
-        # if args.imbalanceset:
-        #     # create long-tail distribution
-        #     imbalance_ratios = np.linspace(args.imb_ratio, 1, num_classes)
-        #     # imbalance_ratios = imbalance_ratios / imbalance_ratios.sum() * num_classes
-
-        #     # get index of each class
-        #     train_targets = np.array(train_set.targets)
-        #     train_idx_per_class = [np.where(train_targets == i)[0] for i in range(10)]
-
-        #     # resampling according to the indices
-        #     new_indices = []
-        #     print(imbalance_ratios)
-        #     for class_idx, class_indices in enumerate(train_idx_per_class):
-        #         n_samples = int(len(class_indices) * imbalance_ratios[class_idx])
-        #         print(n_samples)
-        #         new_indices.extend(np.random.choice(class_indices, n_samples, replace=False))
-            
-        #     new_test_indices = []
-        #     if args.imb_type == "same":
-        #         test_targets = np.array(test_set.targets)
-        #         test_idx_per_class = [np.where(test_targets == i)[0] for i in range(10)]
-
-        #         for class_idx, class_indices in enumerate(test_idx_per_class):
-        #             n_samples = int(len(class_indices) * imbalance_ratios[class_idx])
-        #             new_test_indices.extend(np.random.choice(class_indices, n_samples, replace=False))
-        #         imbalanced_test_set = Subset(test_targets, new_test_indices)
-        #         test_set = imbalanced_test_set
-        #     elif args.imb_type == "different":
-        #         imbalance_ratios = imbalance_ratios[::-1]  # 倒序处理
-        #         test_targets = np.array(test_set.targets)
-        #         test_idx_per_class = [np.where(test_targets == i)[0] for i in range(10)]
-
-        #         for class_idx, class_indices in enumerate(test_idx_per_class):
-        #             n_samples = int(len(class_indices) * imbalance_ratios[class_idx])
-        #             new_test_indices.extend(np.random.choice(class_indices, n_samples, replace=False))
-        #         imbalanced_test_set = Subset(test_targets, new_test_indices)
-        #         test_set = imbalanced_test_set
-
-        #     # 创建不平衡数据集
-        #     imbalanced_train_set = Subset(train_targets, new_indices)
-        #     imbalanced_unlabelled_set = Subset(train_targets, new_indices)
-        #     train_set = imbalanced_train_set
-        #     unlabeled_set = imbalanced_unlabelled_set
-
-
     elif args.dataset == 'CIFAR100':
         file_path = args.data_path + '/cifar100/'
         train_set = MyCIFAR100(file_path, train=True, download=True, transform=train_transform)

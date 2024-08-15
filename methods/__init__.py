@@ -12,3 +12,5 @@ from .WAAL import *
 from .epig import *
 from .tidal import *
 from .entropycb import *
+from .coresetcb import *
+from .alpha_mix_sampling import *

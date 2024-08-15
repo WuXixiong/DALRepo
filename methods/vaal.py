@@ -56,7 +56,7 @@ class VAAL(ALMethod):
 
         return Q_index, scores
 
-    def train_vaal(self, total_epoch=2,num_vae_steps=2, beta=1, adv_param=1): # NEED MORE TRAINING EPOCHES
+    def train_vaal(self, total_epoch=1,num_vae_steps=1, beta=1, adv_param=1): # NEED MORE TRAINING EPOCHES
         n_epoch = total_epoch
         num_vae_steps=num_vae_steps
         beta=beta
@@ -136,7 +136,6 @@ class VAAL(ALMethod):
 
     def pred_dis_score_vaal(self, data):
         loader_te = DataLoader(data, shuffle=False)
-
         self.net_vae.eval()
         self.net_dis.eval()
 
@@ -144,7 +143,8 @@ class VAAL(ALMethod):
 
         with torch.no_grad():
             print("Start select data points...")
-            for x, y, idxs in tqdm(loader_te):
+            # for x, y, idxs in tqdm(loader_te): # structure in DATALOADER has changed
+            for batch_idx, (x, y, idxs) in tqdm(loader_te):
                 x, y = x.cuda(), y.cuda()
                 _,_,mu,_ = self.net_vae(x)
                 out = self.net_dis(mu).cpu()

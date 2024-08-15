@@ -370,7 +370,7 @@ def train(args, models, criterion, optimizers, schedulers, dataloaders):
     print("num_epochs: {}, steps_per_epoch: {}, total_update: {}".format(
             args.epochs, args.steps_per_epoch, int(args.epochs*args.steps_per_epoch)) )
 
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'CCAL', 'SIMILAR', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB']:  # add new methods like VAAL
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'CCAL', 'SIMILAR', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling']:  # add new methods like VAAL
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
             train_epoch(args, models, criterion, optimizers, dataloaders)
             schedulers['backbone'].step()
@@ -496,7 +496,7 @@ def get_more_args(args):
 
 def get_models(args, nets, model, models):
     # Normal
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB']: # add new methods
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling']: # add new methods
         backbone = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device)
         if args.device == "cpu":
             print("Using CPU.")
@@ -568,6 +568,19 @@ def get_models(args, nets, model, models):
             models['backbone'] = backbone
             models['module'] = loss_module
 
+    #LfOSA
+    elif args.method == 'LfOSA':
+        backbone = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device)
+        ood_detection = nets.__dict__[model](args.channel, args.num_IN_class+1, args.im_size).to(args.device) # the 1 more class for predict unknown
+
+        if args.device == "cpu":
+            print("Using CPU.")
+        elif args.data_parallel == True:
+            backbone = nets.nets_utils.MyDataParallel(backbone, device_ids=args.gpu)
+            ood_detection = nets.nets_utils.MyDataParallel(ood_detection, device_ids=args.gpu)
+
+        models = {'backbone': backbone, 'ood_detection': ood_detection}
+    
     return models
 
 def init_mqnet(args, nets, models, optimizers, schedulers):
@@ -605,7 +618,7 @@ def get_optim_configurations(args, models):
         scheduler = torch.optim.lr_scheduler.__dict__[args.scheduler](optimizer)
 
     # Normal
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB']: # also add new methods
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling']: # also add new methods
         optimizers = {'backbone': optimizer}
         schedulers = {'backbone': scheduler}
 

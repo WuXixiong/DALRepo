@@ -21,6 +21,7 @@ class Uncertainty(ALMethod):
 
     def rank_uncertainty(self):
         self.models['backbone'].eval()
+        print(len(self.unlabeled_set))
         selection_loader = torch.utils.data.DataLoader(self.unlabeled_set, batch_size=self.args.test_batch_size, num_workers=self.args.workers)
 
         scores = np.array([])
