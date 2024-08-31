@@ -6,6 +6,10 @@ from utils import *
 parser = argparse.ArgumentParser(description='Parameter Processing')
 
 # new arguments
+# LFOSA
+parser.add_argument('--known-T', type=float, default=0.5)
+parser.add_argument('--unknown-T', type=float, default=0.5)
+# others
 parser.add_argument('--target_per_class', type=int, default=1000, help='# of target per classes in EPIG')
 parser.add_argument('--max_iter', type=int, default=100, help='# of max iterations in Adversarialdeepfool')
 parser.add_argument('--n_drop', type=int, default=10, help='# of drop out')

@@ -1,9 +1,9 @@
 import numpy as np
 import torch
 from math import log
-import numpy as np
 from finch import FINCH
 from utils import open_entropy, lab_conv
+import torch.nn.functional as F
 
 def eoal_sampling(args, unlabeledloader, Len_labeled_ind_train, model, model_bc, knownclass, use_gpu, cluster_centers=None, cluster_labels=None, first_rd=True, diversity=True):
     
@@ -120,3 +120,23 @@ def eoal_sampling(args, unlabeledloader, Len_labeled_ind_train, model, model_bc,
     recall = (len(np.where(selected_gt < args.known_class)[0]) + Len_labeled_ind_train) / (
                 len(np.where(labelArr < args.known_class)[0]) + Len_labeled_ind_train)
     return selected_idx[np.where(selected_gt < args.known_class)[0]], selected_idx[np.where(selected_gt >= args.known_class)[0]], precision, recall
+
+def open_entropy(out_open):
+    assert len(out_open.size()) == 3
+    assert out_open.size(1) == 2
+    out_open = F.softmax(out_open, 1)
+    ent_open = torch.mean(torch.sum(-out_open * torch.log(out_open + 1e-8), 1), 1)
+    return ent_open
+
+def lab_conv(knownclass, label):
+    knownclass = sorted(knownclass)
+    label_convert = torch.zeros(len(label), dtype=int)
+    for j in range(len(label)):
+        for i in range(len(knownclass)):
+
+            if label[j] == knownclass[i]:
+                label_convert[j] = int(knownclass.index(knownclass[i]))
+                break
+            else:
+                label_convert[j] = int(len(knownclass))     
+    return label_convert

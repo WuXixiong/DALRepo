@@ -327,27 +327,42 @@ def train_epoch_LL(args, models, epoch, criterion, optimizers, dataloaders):
 
             batch_idx += 1
 
+def train_epoch_lfosa(args, models, criterion, optimizers, dataloaders):
+    models['ood_detection'].train()
+
+    for data in dataloaders['oodd']: # use unlabeled dateset
+        # Adjust temperature and labels based on ood_classes
+        inputs, labels = data[0].to(args.device), data[1].to(args.device)
+        T = torch.tensor([args.known_T] * labels.shape[0], dtype=torch.float32).to(args.device)
+        for i in range(len(labels)):
+            if labels[i] == args.num_IN_class: # if label belong to the ood
+                T[i] = args.unknown_T
+
+        optimizers['ood_detection'].zero_grad()
+
+        scores, _ = models['ood_detection'](inputs)
+        # Adjust the scores by temperature
+        scores = scores / T.unsqueeze(1)
+        target_loss = criterion(scores, labels)
+        m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
+
+        loss = m_backbone_loss
+        loss.backward()
+        optimizers['ood_detection'].step()
+        # features, outputs = models['ood_detection'](inputs)
+        # outputs = outputs / T.unsqueeze(1)
+        # loss_xent = criterion_xent(outputs, labels)
+        # loss_cent = criterion_cent(features, labels)
+        # loss_cent *= args.weight_cent
+        # loss = loss_xent + loss_cent
+        # optimizer_model.zero_grad()
+        # optimizer_centloss.zero_grad()
+        # loss.backward()
+        # optimizer_model.step()
+
 def train_epoch(args, models, criterion, optimizers, dataloaders):
     models['backbone'].train()
 
-    batch_idx = 0
-    # while(batch_idx < args.steps_per_epoch):
-        # for data in dataloaders['train']:
-        #     inputs, labels = data[0].to(args.device), data[1].to(args.device)
-
-        #     optimizers['backbone'].zero_grad()
-
-        #     scores, features = models['backbone'](inputs)
-        #     target_loss = criterion(scores, labels)
-        #     m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
-
-        #     loss = m_backbone_loss
-        #     loss.backward()
-        #     optimizers['backbone'].step()
-
-        #     batch_idx+=1
-            #if batch_idx >= steps_per_epoch:
-            #    break
     for data in dataloaders['train']:
         inputs, labels = data[0].to(args.device), data[1].to(args.device)
 
@@ -361,19 +376,22 @@ def train_epoch(args, models, criterion, optimizers, dataloaders):
         loss.backward()
         optimizers['backbone'].step()
 
-        batch_idx+=1
-        # if batch_idx >= args.steps_per_epoch:
-        #     break
-
 def train(args, models, criterion, optimizers, schedulers, dataloaders):
     print('>> Train a Model.')
-    print("num_epochs: {}, steps_per_epoch: {}, total_update: {}".format(
-            args.epochs, args.steps_per_epoch, int(args.epochs*args.steps_per_epoch)) )
+    # print("num_epochs: {}, steps_per_epoch: {}, total_update: {}".format(
+    #         args.epochs, args.steps_per_epoch, int(args.epochs*args.steps_per_epoch)) )
 
     if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'CCAL', 'SIMILAR', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling']:  # add new methods like VAAL
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
             train_epoch(args, models, criterion, optimizers, dataloaders)
             schedulers['backbone'].step()
+    
+    elif args.method in ['LFOSA']: #LFOSA
+        for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
+            train_epoch(args, models, criterion, optimizers, dataloaders)
+            train_epoch_lfosa(args, models, criterion, optimizers, dataloaders)
+            schedulers['backbone'].step()
+            # schedulers['ood_detection'].step()
 
     elif args.method in ['LL']: #MQNet
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
@@ -406,6 +424,26 @@ def test(args, models, dataloaders):
             # Compute output
             with torch.no_grad():
                 scores, _ = models['backbone'](inputs)
+
+            # Measure accuracy and record loss
+            prec1 = accuracy(scores.data, labels, topk=(1,))[0]
+            top1.update(prec1.item(), inputs.size(0))
+        print('Test acc: * Prec@1 {top1.avg:.3f}'.format(top1=top1))
+
+    return top1.avg
+
+def test_ood(args, models, dataloaders):
+    top1 = AverageMeter('Acc@1', ':6.2f')
+
+    # Switch to evaluate mode
+    models['ood_detection'].eval()
+    with torch.no_grad():
+        for i, data in enumerate(dataloaders['test']):
+            inputs, labels = data[0].to(args.device), data[1].to(args.device)
+
+            # Compute output
+            with torch.no_grad():
+                scores, _ = models['ood_detection'](inputs)
 
             # Measure accuracy and record loss
             prec1 = accuracy(scores.data, labels, topk=(1,))[0]
@@ -569,7 +607,7 @@ def get_models(args, nets, model, models):
             models['module'] = loss_module
 
     #LfOSA
-    elif args.method == 'LfOSA':
+    elif args.method == 'LFOSA':
         backbone = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device)
         ood_detection = nets.__dict__[model](args.channel, args.num_IN_class+1, args.im_size).to(args.device) # the 1 more class for predict unknown
 
@@ -601,21 +639,38 @@ def get_optim_configurations(args, models):
     if args.optimizer == "SGD":
         optimizer = torch.optim.SGD(models['backbone'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
+        if args.method == 'LFOSA':
+            optimizer_oodd = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
+                                    weight_decay=args.weight_decay)
     elif args.optimizer == "Adam":
         optimizer = torch.optim.Adam(models['backbone'].parameters(), args.lr, weight_decay=args.weight_decay)
+        if args.method == 'LFOSA':
+            optimizer_oodd = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
+                                    weight_decay=args.weight_decay)
     else:
         optimizer = torch.optim.__dict__[args.optimizer](models['backbone'].parameters(), args.lr, momentum=args.momentum,
                                                          weight_decay=args.weight_decay)
+        if args.method == 'LFOSA':
+            optimizer_oodd = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
+                                    weight_decay=args.weight_decay)
 
     # LR scheduler
     if args.scheduler == "CosineAnnealingLR":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, eta_min=args.min_lr)
+        if args.method == 'LFOSA':
+            scheduler_oodd = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_oodd, args.epochs, eta_min=args.min_lr)
     elif args.scheduler == "StepLR":
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
+        if args.method == 'LFOSA':
+            scheduler_oodd = torch.optim.lr_scheduler.StepLR(optimizer_oodd, step_size=args.step_size, gamma=args.gamma)
     elif args.scheduler == "MultiStepLR":
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestone)
+        if args.method == 'LFOSA':
+            scheduler_oodd = torch.optim.lr_scheduler.MultiStepLR(optimizer_oodd, milestones=args.milestone)
     else:
         scheduler = torch.optim.lr_scheduler.__dict__[args.scheduler](optimizer)
+        if args.method == 'LFOSA':
+            scheduler_oodd = torch.optim.lr_scheduler.__dict__[args.scheduler](optimizer_oodd)
 
     # Normal
     if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling']: # also add new methods
@@ -656,5 +711,10 @@ def get_optim_configurations(args, models):
 
         optimizers = {'backbone': optimizer, 'module': optim_module, 'csi': optim_csi}
         schedulers = {'backbone': scheduler, 'module': sched_module, 'csi': scheduler_warmup_csi}
+    
+    # lfosa
+    elif args.method == 'LFOSA':
+        optimizers = {'backbone': optimizer, 'ood_detection': optimizer_oodd}
+        schedulers = {'backbone': scheduler, 'ood_detection': scheduler_oodd}
 
     return criterion, optimizers, schedulers

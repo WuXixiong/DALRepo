@@ -73,12 +73,18 @@ if __name__ == '__main__':
             sampler_test = SubsetSequentialSampler(test_I_index)
             train_loader = DataLoader(train_dst, sampler=sampler_labeled, batch_size=args.batch_size, num_workers=args.workers)
             test_loader = DataLoader(test_dst, sampler=sampler_test, batch_size=args.test_batch_size, num_workers=args.workers)
+            if args.method == 'LFOSA':
+                ood_detection_index = I_index + O_index
+                sampler_oodd = SubsetRandomSampler(ood_detection_index)  # make indices initial to the samples
+                oodd_loader = DataLoader(train_dst, sampler=sampler_oodd, batch_size=args.batch_size, num_workers=args.workers)
         elif args.dataset == 'ImageNet50': # DataLoaderX for efficiency
             dst_subset = torch.utils.data.Subset(train_dst, I_index)
             dst_test = torch.utils.data.Subset(test_dst, test_I_index)
             train_loader = DataLoaderX(dst_subset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=False)
             test_loader = DataLoaderX(dst_test, batch_size=args.test_batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
         dataloaders = {'train': train_loader, 'test': test_loader}
+        if args.method == 'LFOSA':
+            dataloaders = {'train': train_loader, 'oodd': oodd_loader, 'test': test_loader}
 
         # Active learning
         logs = []
@@ -114,6 +120,9 @@ if __name__ == '__main__':
 
             print('Trial {}/{} || Cycle {}/{} || Labeled IN size {}: Test acc {}'.format(
                     trial + 1, args.trial, cycle + 1, args.cycle, len(I_index), acc), flush=True)
+            if args.method == "LFOSA":
+                ood_acc = test_ood(args, models, dataloaders)
+                print('Out of domain detection acc is {}'.format(ood_acc), flush=True)
 
             #### AL Query ####
             print("==========Start Querying==========")
@@ -146,6 +155,9 @@ if __name__ == '__main__':
             if args.dataset in ['CIFAR10', 'CIFAR100']:
                 sampler_labeled = SubsetRandomSampler(I_index)  # make indices initial to the samples
                 dataloaders['train'] = DataLoader(train_dst, sampler=sampler_labeled, batch_size=args.batch_size, num_workers=args.workers)
+                if args.method == 'LFOSA':
+                    sampler_query = SubsetRandomSampler(Q_index)  # make indices initial to the samples
+                    dataloaders['oodd'] = DataLoader(train_dst, sampler=sampler_query, batch_size=args.batch_size, num_workers=args.workers)
             elif args.dataset == 'ImageNet50':
                 dst_subset = torch.utils.data.Subset(train_dst, I_index)
                 train_loader = DataLoaderX(dst_subset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=False)
