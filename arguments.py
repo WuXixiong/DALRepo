@@ -6,6 +6,13 @@ from utils import *
 parser = argparse.ArgumentParser(description='Parameter Processing')
 
 # new arguments
+# VESSAL
+parser.add_argument('--zeta', help='z_t in equation 3', type=float, default=1)
+parser.add_argument('--single_pass', default=False, action='store_true')
+parser.add_argument('--embs', default="grad_embs", help="whether to use gradient embeddings (grad_embs) or penultimate layer embeddings (penultimate).", type=str)
+parser.add_argument('--rank', help='rank of the sample-wise fisher information matrix', type=int, default=1)
+parser.add_argument('--cov_inv_scaling', help='covariance inverse scaling', type=float, default=100)
+parser.add_argument('--early_stop', default=False, action='store_true')
 # SAAL
 parser.add_argument('--acqMode', default='Max_Diversity', type=str, help='acquisition mode / Max (max_perturbed_loss), Diff (max_perturbed_loss-original_loss), Max_Diversity, Diff_Diversity')
 parser.add_argument('--labelMode', default='Pseudo', type=str, help='label mode / True (sharpness with true label), Pseudo (sharpness with pseudo label), InversePseudo (sharpness with inverse pseudo label')
