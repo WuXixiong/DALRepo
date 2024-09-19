@@ -43,9 +43,9 @@ if __name__ == '__main__':
         # Initialize a labeled dataset by randomly sampling K=1,000 points from the entire dataset.
         I_index, O_index, U_index, Q_index = [], [], [], []
         I_index, O_index, U_index = get_sub_train_dataset(args, train_dst, I_index, O_index, U_index, Q_index, initial=True)
-        if args.method in ['LFOSA', 'EOAL']:
-            U_index = U_index+O_index
-            O_index = []
+        # if args.method in ['LFOSA', 'EOAL']:
+        #     U_index = U_index+O_index
+        #     O_index = []
         if args.method == 'EPIG':
             # get the actual unlabelled dataset
             filtered_dst = [element for element in unlabeled_dst if element[2] in U_index]
@@ -112,7 +112,8 @@ if __name__ == '__main__':
             criterion, optimizers, schedulers = get_optim_configurations(args, models)
             # for LFOSA and EOAL...
             criterion_xent = nn.CrossEntropyLoss()
-            criterion_cent = CenterLoss(num_classes=args.num_IN_class, feat_dim=args.num_IN_class,use_gpu=True) # feat_dim have to be equal to known classes + 1
+            # criterion_cent = CenterLoss(num_classes=args.num_IN_class, feat_dim=args.num_IN_class,use_gpu=True)
+            criterion_cent = CenterLoss(num_classes=args.num_IN_class+1, feat_dim=512,use_gpu=True) # feat_dim = first dim of feature (output,feature from model return)
             optimizer_centloss = torch.optim.SGD(criterion_cent.parameters(), lr=args.lr_cent)
 
             # Self-supervised Training (for CCAL and MQ-Net with CSI)

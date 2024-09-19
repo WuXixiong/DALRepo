@@ -29,7 +29,7 @@ class LFOSA(ALMethod):
                 labels = data[1]
                 index = data[2]
 
-                _, outputs = self.models['ood_detection'](inputs)
+                outputs, _ = self.models['ood_detection'](inputs)
                 labelArr += list(np.array(labels.cpu().data))
                 # activation value based
                 v_ij, predicted = outputs.max(1)
