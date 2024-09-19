@@ -8,3 +8,4 @@ from .querynet import *
 
 from .vae import *
 from .tdnet import *
+from .eoalnet import *

@@ -15,6 +15,48 @@ from methods.methods_utils.ccal_util import *
 from methods.methods_utils.simclr import semantic_train_epoch
 from methods.methods_utils.simclr_CSI import csi_train_epoch
 
+# LFOSA
+class CenterLoss(nn.Module):
+    """Center loss.
+    
+    Reference:
+    Wen et al. A Discriminative Feature Learning Approach for Deep Face Recognition. ECCV 2016.
+    
+    Args:
+        num_classes (int): number of classes.
+        feat_dim (int): feature dimension.
+    """
+    def __init__(self, num_classes=5, feat_dim=5, use_gpu=True): # for 4 known classes
+        super(CenterLoss, self).__init__()
+        self.num_classes = num_classes
+        self.feat_dim = feat_dim
+        self.use_gpu = use_gpu
+
+        if self.use_gpu:
+            self.centers = nn.Parameter(torch.randn(self.num_classes, self.feat_dim).cuda())
+        else:
+            self.centers = nn.Parameter(torch.randn(self.num_classes, self.feat_dim))
+
+    def forward(self, x, labels):
+        """
+        Args:
+            x: feature matrix with shape (batch_size, feat_dim).
+            labels: ground truth labels with shape (batch_size).
+        """
+        batch_size = x.size(0)
+        distmat = torch.pow(x, 2).sum(dim=1, keepdim=True).expand(batch_size, self.num_classes) + \
+                  torch.pow(self.centers, 2).sum(dim=1, keepdim=True).expand(self.num_classes, batch_size).t()
+        distmat.addmm_(1, -2, x, self.centers.t())
+
+        classes = torch.arange(self.num_classes).long()
+        if self.use_gpu: classes = classes.cuda()
+        labels = labels.unsqueeze(1).expand(batch_size, self.num_classes)
+        mask = labels.eq(classes.expand(batch_size, self.num_classes))
+
+        dist = distmat * mask.float()
+        loss = dist.clamp(min=1e-12, max=1e+12).sum() / batch_size
+
+        return loss
 
 class DataLoaderX(torch.utils.data.DataLoader):
     def __iter__(self):
@@ -327,38 +369,39 @@ def train_epoch_LL(args, models, epoch, criterion, optimizers, dataloaders):
 
             batch_idx += 1
 
-def train_epoch_lfosa(args, models, criterion, optimizers, dataloaders):
+def train_epoch_lfosa(args, models, criterion, optimizers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss):
     models['ood_detection'].train()
+    xent_losses = AverageMeter('xent_losses')
+    cent_losses = AverageMeter('cent_losses')
+    losses = AverageMeter('losses')
 
-    for data in dataloaders['oodd']: # use unlabeled dateset
+    for data in dataloaders['query']: # use unlabeled dateset
         # Adjust temperature and labels based on ood_classes
-        inputs, labels = data[0].to(args.device), data[1].to(args.device)
+        inputs, labels, indexes = data[0].to(args.device), data[1].to(args.device), data[2].to(args.device)
         T = torch.tensor([args.known_T] * labels.shape[0], dtype=torch.float32).to(args.device)
         for i in range(len(labels)):
-            if labels[i] == args.num_IN_class: # if label belong to the ood
+            if labels[i] not in args.target_list: # if label belong to the ood
                 T[i] = args.unknown_T
 
-        optimizers['ood_detection'].zero_grad()
-
-        scores, _ = models['ood_detection'](inputs)
-        # Adjust the scores by temperature
-        scores = scores / T.unsqueeze(1)
-        target_loss = criterion(scores, labels)
-        m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
-
-        loss = m_backbone_loss
+        features, outputs = models['ood_detection'](inputs)
+        outputs = outputs / T.unsqueeze(1)
+        loss_xent = criterion_xent(outputs, labels)
+        loss_cent = criterion_cent(features, labels)
+        loss_cent *= args.weight_cent
+        loss = loss_xent + loss_cent
+        optimizers['ood_detection'].zero_grad() # line 261 optimizer_model.zero_grad()
+        optimizer_centloss.zero_grad()
         loss.backward()
         optimizers['ood_detection'].step()
-        # features, outputs = models['ood_detection'](inputs)
-        # outputs = outputs / T.unsqueeze(1)
-        # loss_xent = criterion_xent(outputs, labels)
-        # loss_cent = criterion_cent(features, labels)
-        # loss_cent *= args.weight_cent
-        # loss = loss_xent + loss_cent
-        # optimizer_model.zero_grad()
-        # optimizer_centloss.zero_grad()
-        # loss.backward()
-        # optimizer_model.step()
+        # by doing so, weight_cent would not impact on the learning of centers
+        if args.weight_cent > 0.0:
+            for param in criterion_cent.parameters():
+                param.grad.data *= (1. / args.weight_cent)
+            optimizer_centloss.step()
+
+        losses.update(loss.item(), labels.size(0))
+        xent_losses.update(loss_xent.item(), labels.size(0))
+        cent_losses.update(loss_cent.item(), labels.size(0))
 
 def train_epoch(args, models, criterion, optimizers, dataloaders):
     models['backbone'].train()
@@ -376,22 +419,87 @@ def train_epoch(args, models, criterion, optimizers, dataloaders):
         loss.backward()
         optimizers['backbone'].step()
 
-def train(args, models, criterion, optimizers, schedulers, dataloaders):
+def train_epoch_eoal(args, models, criterion, optimizers, dataloaders, criterion_xent, O_index, cluster_centers, cluster_labels, cluster_indices):
+    models['ood_detection'].train()
+    models['model_bc'].train()
+    xent_losses = AverageMeter('xent_losses')
+    open_losses = AverageMeter('open_losses')
+    k_losses = AverageMeter('k_losses')
+    losses = AverageMeter('losses')
+    invalidList = O_index
+
+    for data in dataloaders['query']: # use unlabeled dateset
+        # Adjust temperature and labels based on ood_classes
+        inputs, labels, indexes = data[0].to(args.device), data[1].to(args.device), data[2].to(args.device)
+        T = torch.tensor([args.known_T] * labels.shape[0], dtype=torch.float32).to(args.device)
+        labels = lab_conv(args.target_list, labels) # labels = lab_conv(knownclass, labels)
+        features, outputs = models['ood_detection'](inputs) # outputs, features
+        out_open = models['model_bc'](features) # orginally features not outputs, maybe because of the different network structure
+        out_open = out_open.view(features.size(0), 2, -1) # outputs.size(0)
+        # ent = open_entropy(out_open)
+        labels_unk = []
+        for i in range(len(labels)):
+            # Annotate "unknown"
+            if labels[i] not in args.target_list:
+                T[i] = args.unknown_T
+                tmp_idx = indexes[i]
+                tmp_idx = torch.tensor(tmp_idx).to(args.device)
+                if cluster_indices is None:
+                    continue
+                cluster_indices = torch.tensor(cluster_indices).to(args.device)
+                loc = torch.where(cluster_indices == tmp_idx)[0]
+                loc = loc.cpu() 
+                labels_unk += list(np.array(cluster_labels[loc].cpu().data)) 
+        labels_unk = torch.tensor(labels_unk).to(args.device)
+        open_loss_pos, open_loss_neg, open_loss_pos_ood, open_loss_neg_ood = entropic_bc_loss(out_open, labels, args.pareta_alpha, args.num_IN_class, len(invalidList), args.w_ent)
+
+        if len(invalidList) > 0:
+            regu_loss, _, _ = reg_loss(features, labels, cluster_centers, labels_unk, args.num_IN_class)  # originally features
+            loss_open = 0.5 * (open_loss_pos + open_loss_neg) + 0.5 * (open_loss_pos_ood + open_loss_neg_ood)
+        else:
+            loss_open = 0.5 * (open_loss_pos + open_loss_neg)
+
+        outputs = outputs / T.unsqueeze(1)
+        outputs = outputs.to(args.device)
+        labels = labels.to(args.device)
+        loss_xent = criterion_xent(outputs, labels)
+        if len(invalidList) > 0:
+            loss = loss_xent + loss_open + args.reg_w * regu_loss
+        else:
+            loss = loss_xent + loss_open
+
+        optimizers['ood_detection'].zero_grad()
+        optimizers['model_bc'].zero_grad()
+        loss.backward()
+        optimizers['ood_detection'].step()
+        optimizers['model_bc'].step()
+        
+        losses.update(loss.item(), labels.size(0))
+        xent_losses.update(loss_xent.item(), labels.size(0))
+        open_losses.update(loss_open.item(), labels.size(0))
+        if len(invalidList) > 0:
+            k_losses.update(regu_loss.item(), labels.size(0))
+
+
+def train(args, models, criterion, optimizers, schedulers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss, O_index, cluster_centers, cluster_labels, cluster_indices):
     print('>> Train a Model.')
     # print("num_epochs: {}, steps_per_epoch: {}, total_update: {}".format(
     #         args.epochs, args.steps_per_epoch, int(args.epochs*args.steps_per_epoch)) )
 
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'CCAL', 'SIMILAR', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling']:  # add new methods like VAAL
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'CCAL', 'SIMILAR', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling', 'noise_stability', 'SAAL']:  # add new methods like VAAL
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
             train_epoch(args, models, criterion, optimizers, dataloaders)
             schedulers['backbone'].step()
     
-    elif args.method in ['LFOSA']: #LFOSA
+    elif args.method in ['LFOSA', 'EOAL']: #LFOSA, EOAL
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
             train_epoch(args, models, criterion, optimizers, dataloaders)
-            train_epoch_lfosa(args, models, criterion, optimizers, dataloaders)
+            if args.method == 'LFOSA':
+                train_epoch_lfosa(args, models, criterion, optimizers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss)
+                schedulers['ood_detection'].step()
+            elif args.method == 'EOAL':
+                train_epoch_eoal(args, models, criterion, optimizers, dataloaders, criterion_xent, O_index, cluster_centers, cluster_labels, cluster_indices)
             schedulers['backbone'].step()
-            # schedulers['ood_detection'].step()
 
     elif args.method in ['LL']: #MQNet
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
@@ -534,7 +642,7 @@ def get_more_args(args):
 
 def get_models(args, nets, model, models):
     # Normal
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling']: # add new methods
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling', 'noise_stability', 'SAAL']: # add new methods
         backbone = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device)
         if args.device == "cpu":
             print("Using CPU.")
@@ -606,10 +714,14 @@ def get_models(args, nets, model, models):
             models['backbone'] = backbone
             models['module'] = loss_module
 
-    #LfOSA
-    elif args.method == 'LFOSA':
+    #LfOSA, EOAL
+    elif args.method in ['LFOSA', 'EOAL']:
         backbone = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device)
-        ood_detection = nets.__dict__[model](args.channel, args.num_IN_class+1, args.im_size).to(args.device) # the 1 more class for predict unknown
+        ood_detection = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device) # the 1 more class for predict unknown
+
+        if args.method == 'EOAL':
+            #bc = ResClassifier_MME(num_classes=2 * (args.n_class),norm=False, input_size=128).cuda()
+            model_bc = nets.eoalnet.ResClassifier_MME(num_classes=2 * (args.num_IN_class),norm=False, input_size=512).to(args.device) # original input size was 128
 
         if args.device == "cpu":
             print("Using CPU.")
@@ -618,6 +730,8 @@ def get_models(args, nets, model, models):
             ood_detection = nets.nets_utils.MyDataParallel(ood_detection, device_ids=args.gpu)
 
         models = {'backbone': backbone, 'ood_detection': ood_detection}
+        if args.method == 'EOAL':
+            models['model_bc'] = model_bc
     
     return models
 
@@ -639,41 +753,50 @@ def get_optim_configurations(args, models):
     if args.optimizer == "SGD":
         optimizer = torch.optim.SGD(models['backbone'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
-        if args.method == 'LFOSA':
-            optimizer_oodd = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
+        if args.method in ['LFOSA', 'EOAL']:
+            optimizer_ood = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
+            if args.method == 'EOAL':
+                params_bc = list(models['model_bc'].parameters())
+                optim_C = torch.optim.SGD(params_bc, lr=args.lr_model, momentum=0.9, weight_decay=0.0005, nesterov=True)
     elif args.optimizer == "Adam":
         optimizer = torch.optim.Adam(models['backbone'].parameters(), args.lr, weight_decay=args.weight_decay)
-        if args.method == 'LFOSA':
-            optimizer_oodd = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
+        if args.method in ['LFOSA', 'EOAL']:
+            optimizer_ood = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
+            if args.method == 'EOAL':
+                params_bc = list(models['model_bc'].parameters())
+                optim_C = torch.optim.SGD(params_bc, lr=args.lr_model, momentum=0.9, weight_decay=0.0005, nesterov=True)
     else:
         optimizer = torch.optim.__dict__[args.optimizer](models['backbone'].parameters(), args.lr, momentum=args.momentum,
                                                          weight_decay=args.weight_decay)
-        if args.method == 'LFOSA':
-            optimizer_oodd = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
+        if args.method in ['LFOSA', 'EOAL']:
+            optimizer_ood = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
+            if args.method == 'EOAL':
+                params_bc = list(models['model_bc'].parameters())
+                optim_C = torch.optim.SGD(params_bc, lr=args.lr_model, momentum=0.9, weight_decay=0.0005, nesterov=True)
 
     # LR scheduler
     if args.scheduler == "CosineAnnealingLR":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, eta_min=args.min_lr)
-        if args.method == 'LFOSA':
-            scheduler_oodd = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_oodd, args.epochs, eta_min=args.min_lr)
+        if args.method in ['LFOSA', 'EOAL']:
+            scheduler_ood = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_ood, args.epochs, eta_min=args.min_lr)
     elif args.scheduler == "StepLR":
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
-        if args.method == 'LFOSA':
-            scheduler_oodd = torch.optim.lr_scheduler.StepLR(optimizer_oodd, step_size=args.step_size, gamma=args.gamma)
+        if args.method in ['LFOSA', 'EOAL']:
+            scheduler_ood = torch.optim.lr_scheduler.StepLR(optimizer_ood, step_size=args.step_size, gamma=args.gamma)
     elif args.scheduler == "MultiStepLR":
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestone)
-        if args.method == 'LFOSA':
-            scheduler_oodd = torch.optim.lr_scheduler.MultiStepLR(optimizer_oodd, milestones=args.milestone)
+        if args.method in ['LFOSA', 'EOAL']:
+            scheduler_ood = torch.optim.lr_scheduler.MultiStepLR(optimizer_ood, milestones=args.milestone)
     else:
         scheduler = torch.optim.lr_scheduler.__dict__[args.scheduler](optimizer)
-        if args.method == 'LFOSA':
-            scheduler_oodd = torch.optim.lr_scheduler.__dict__[args.scheduler](optimizer_oodd)
+        if args.method in ['LFOSA', 'EOAL']:
+            scheduler_ood = torch.optim.lr_scheduler.__dict__[args.scheduler](optimizer_ood)
 
     # Normal
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling']: # also add new methods
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling', 'noise_stability', 'SAAL']: # also add new methods
         optimizers = {'backbone': optimizer}
         schedulers = {'backbone': scheduler}
 
@@ -713,8 +836,130 @@ def get_optim_configurations(args, models):
         schedulers = {'backbone': scheduler, 'module': sched_module, 'csi': scheduler_warmup_csi}
     
     # lfosa
-    elif args.method == 'LFOSA':
-        optimizers = {'backbone': optimizer, 'ood_detection': optimizer_oodd}
-        schedulers = {'backbone': scheduler, 'ood_detection': scheduler_oodd}
+    elif args.method in ['LFOSA', 'EOAL']:
+        optimizers = {'backbone': optimizer, 'ood_detection': optimizer_ood}
+        schedulers = {'backbone': scheduler, 'ood_detection': scheduler_ood}
+        if args.method == 'EOAL':
+            optimizers['model_bc'] = optim_C
 
     return criterion, optimizers, schedulers
+
+# EOAL
+from finch import FINCH
+def unknown_clustering(args, model, model_bc, trainloader_C, knownclass):
+    model.eval()
+    model_bc.eval()
+    feat_all = torch.zeros([1, 512], device='cuda') # originally 128
+    labelArr, labelArr_true, queryIndex, y_pred = [], [], [], []
+
+    for i, data in enumerate(trainloader_C):
+        labels = data[1].to(args.device)
+        index = data[2].to(args.device)
+        data = data[0].to(args.device)
+
+        labels_true = labels
+        labelArr_true += list(labels_true.cpu().data.numpy())
+        labels = lab_conv(knownclass, labels)
+        # if use_gpu:
+        #     data, labels = data.cuda(), labels.cuda()
+        outputs, features = model(data)
+        softprobs = torch.softmax(outputs, dim=1)
+        _, predicted = torch.max(softprobs, 1)
+        y_pred += list(predicted.cpu().data.numpy())
+        feat_all = torch.cat([feat_all, features.data], 0)
+        queryIndex += index
+        labelArr += list(labels.cpu().data.numpy())
+    
+    queryIndex = [tensor.cpu() for tensor in queryIndex]
+    queryIndex = np.array(queryIndex)
+    y_pred = np.array(y_pred)
+
+    embeddings = feat_all[1:].cpu().numpy()
+    _, _, req_c = FINCH(embeddings, req_clust= args.w_unk_cls * len(knownclass), verbose=False)
+    cluster_labels = req_c
+    # Convert back to tensors after clustering
+    embeddings = torch.tensor(embeddings, device='cuda')
+    labelArr_true = torch.tensor(labelArr_true)
+    queryIndex = torch.tensor(queryIndex)
+    cluster_labels = torch.tensor(cluster_labels)
+    cluster_centers = calculate_cluster_centers(embeddings, cluster_labels)
+    return cluster_centers, embeddings, cluster_labels, queryIndex
+
+def lab_conv(knownclass, label):
+    knownclass = sorted(knownclass)
+    label_convert = torch.zeros(len(label), dtype=int)
+    for j in range(len(label)):
+        for i in range(len(knownclass)):
+
+            if label[j] == knownclass[i]:
+                label_convert[j] = int(knownclass.index(knownclass[i]))
+                break
+            else:
+                label_convert[j] = int(len(knownclass))     
+    return label_convert
+
+def calculate_cluster_centers(features, cluster_labels):
+    unique_clusters = torch.unique(cluster_labels)
+    cluster_centers = torch.zeros((len(unique_clusters), features.shape[1])).cuda()
+    
+    for i, cluster_id in enumerate(unique_clusters):
+        cluster_indices = torch.where(cluster_labels == cluster_id)[0]
+        cluster_features = features[cluster_indices]
+        # Calculate the center of the cluster using the mean of features
+        cluster_center = torch.mean(cluster_features, dim=0)
+        cluster_centers[i] = cluster_center
+    return cluster_centers
+
+def entropic_bc_loss(out_open, label, pareto_alpha, num_classes, query, weight):
+    assert len(out_open.size()) == 3
+    assert out_open.size(1) == 2
+
+    out_open = F.softmax(out_open, 1)
+    label_p = torch.zeros((out_open.size(0),
+                        out_open.size(2)+1)).cuda()  
+    label_range = torch.arange(0, out_open.size(0))  
+    label_p[label_range, label] = 1  
+    label_n = 1 - label_p
+    if query > 0:
+        label_p[label==num_classes,:] = pareto_alpha/num_classes
+        label_n[label==num_classes,:] = pareto_alpha/num_classes
+    label_p = label_p[:,:-1]
+    label_n = label_n[:,:-1]
+    if (query > 0) and (weight!=0):
+        open_loss_pos = torch.mean(torch.sum(-torch.log(out_open[label<num_classes, 1, :]
+                                                        + 1e-8) * (1 - pareto_alpha) * label_p[label<num_classes], 1))
+        open_loss_neg = torch.mean(torch.max(-torch.log(out_open[label<num_classes, 0, :] +
+                                                    1e-8) * (1 - pareto_alpha) * label_n[label<num_classes], 1)[0]) ##### take max negative alone
+        open_loss_pos_ood = torch.mean(torch.sum(-torch.log(out_open[label==num_classes, 1, :] +
+                                                    1e-8) * label_p[label==num_classes], 1))
+        open_loss_neg_ood = torch.mean(torch.sum(-torch.log(out_open[label==num_classes, 0, :] +
+                                                    1e-8) * label_n[label==num_classes], 1))
+        
+        return open_loss_pos, open_loss_neg, open_loss_neg_ood, open_loss_pos_ood
+    else:
+        open_loss_pos = torch.mean(torch.sum(-torch.log(out_open[:, 1, :]
+                                                        + 1e-8) * (1 - 0) * label_p, 1))
+        open_loss_neg = torch.mean(torch.max(-torch.log(out_open[:, 0, :] +
+                                                    1e-8) * (1 - 0) * label_n, 1)[0]) ##### take max negative alone
+        return open_loss_pos, open_loss_neg, 0, 0
+    
+def reg_loss(features, labels, cluster_centers, cluster_labels, num_classes):
+    features_k, _ = features[labels<num_classes], labels[labels<num_classes]
+    features_u, _ = features[labels==num_classes], labels[labels==num_classes]
+    k_dists = torch.cdist(features_k, cluster_centers)
+    uk_dists = torch.cdist(features_u, cluster_centers)
+    pk = torch.softmax(-k_dists, dim=1)
+    pu = torch.softmax(-uk_dists, dim=1)
+
+    k_ent = -torch.sum(pk*torch.log(pk+1e-20), 1)
+    u_ent = -torch.sum(pu*torch.log(pu+1e-20), 1)
+    true = torch.gather(uk_dists, 1, cluster_labels.long().view(-1, 1)).view(-1)
+    print(f"cluster_labels size: {len(cluster_labels)}, uk_dists size: {len(uk_dists)}")
+    non_gt = torch.tensor([[i for i in range(len(cluster_centers)) if cluster_labels[x] != i] for x in range(len(uk_dists))]).long().cuda()
+    # non_gt = torch.tensor([[i for i in range(len(cluster_centers)) if x < len(cluster_labels) and cluster_labels[x] != i] for x in range(len(uk_dists))]).long().cuda()
+    others = torch.gather(uk_dists, 1, non_gt)
+    intra_loss = torch.mean(true)
+    inter_loss = torch.exp(-others+true.unsqueeze(1))
+    inter_loss = torch.mean(torch.log(1+torch.sum(inter_loss, dim = 1)))
+    loss = 0.1*intra_loss + 1*inter_loss
+    return loss, k_ent.sum(), u_ent.sum()

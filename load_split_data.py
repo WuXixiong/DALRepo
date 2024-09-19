@@ -98,7 +98,7 @@ def get_dataset(args, trial):
         args.input_size = 32 * 32 * 3
         args.target_list = list(range(10))
         # args.target_lists = [[4, 2, 5, 7], [7, 1, 2, 5], [6, 4, 3, 2], [8, 9, 1, 3], [2, 9, 5, 3]] # Randomly Selected
-        # args.target_list = args.target_lists[trial]
+        # args.target_list = [trial]
         # args.untarget_list = list(np.setdiff1d(list(range(0, 10)), list(args.target_list)))
         # args.num_IN_class = 4
         if args.openset:

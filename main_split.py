@@ -43,6 +43,9 @@ if __name__ == '__main__':
         # Initialize a labeled dataset by randomly sampling K=1,000 points from the entire dataset.
         I_index, O_index, U_index, Q_index = [], [], [], []
         I_index, O_index, U_index = get_sub_train_dataset(args, train_dst, I_index, O_index, U_index, Q_index, initial=True)
+        if args.method in ['LFOSA', 'EOAL']:
+            U_index = U_index+O_index
+            O_index = []
         if args.method == 'EPIG':
             # get the actual unlabelled dataset
             filtered_dst = [element for element in unlabeled_dst if element[2] in U_index]
@@ -73,18 +76,20 @@ if __name__ == '__main__':
             sampler_test = SubsetSequentialSampler(test_I_index)
             train_loader = DataLoader(train_dst, sampler=sampler_labeled, batch_size=args.batch_size, num_workers=args.workers)
             test_loader = DataLoader(test_dst, sampler=sampler_test, batch_size=args.test_batch_size, num_workers=args.workers)
-            if args.method == 'LFOSA':
+            if args.method in ['LFOSA', 'EOAL']:
                 ood_detection_index = I_index + O_index
-                sampler_oodd = SubsetRandomSampler(ood_detection_index)  # make indices initial to the samples
-                oodd_loader = DataLoader(train_dst, sampler=sampler_oodd, batch_size=args.batch_size, num_workers=args.workers)
+                sampler_ood = SubsetRandomSampler(O_index)  # make indices initial to the samples
+                sampler_query = SubsetRandomSampler(ood_detection_index)  # make indices initial to the samples
+                query_loader = DataLoader(train_dst, sampler=sampler_labeled, batch_size=args.batch_size, num_workers=args.workers)
+                ood_dataloader = DataLoader(train_dst, sampler=sampler_ood, batch_size=args.batch_size, num_workers=args.workers)
         elif args.dataset == 'ImageNet50': # DataLoaderX for efficiency
             dst_subset = torch.utils.data.Subset(train_dst, I_index)
             dst_test = torch.utils.data.Subset(test_dst, test_I_index)
             train_loader = DataLoaderX(dst_subset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=False)
             test_loader = DataLoaderX(dst_test, batch_size=args.test_batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
         dataloaders = {'train': train_loader, 'test': test_loader}
-        if args.method == 'LFOSA':
-            dataloaders = {'train': train_loader, 'oodd': oodd_loader, 'test': test_loader}
+        if args.method in ['LFOSA', 'EOAL']:
+            dataloaders = {'train': train_loader, 'query': query_loader, 'test': test_loader, 'ood': ood_dataloader}
 
         # Active learning
         logs = []
@@ -105,14 +110,23 @@ if __name__ == '__main__':
 
             # Loss, criterion and scheduler (re)initialization
             criterion, optimizers, schedulers = get_optim_configurations(args, models)
+            # for LFOSA and EOAL...
+            criterion_xent = nn.CrossEntropyLoss()
+            criterion_cent = CenterLoss(num_classes=args.num_IN_class, feat_dim=args.num_IN_class,use_gpu=True) # feat_dim have to be equal to known classes + 1
+            optimizer_centloss = torch.optim.SGD(criterion_cent.parameters(), lr=args.lr_cent)
 
             # Self-supervised Training (for CCAL and MQ-Net with CSI)
             if cycle == 0:
                 models = self_sup_train(args, trial, models, optimizers, schedulers, train_dst, I_index, O_index, U_index)
 
+            # EOAL
+            cluster_centers, cluster_labels, cluster_indices = None, None, None
+            if cycle > 0 and args.method == 'EOAL':
+                cluster_centers, _, cluster_labels, cluster_indices = unknown_clustering(args, models['ood_detection'], models['model_bc'], dataloaders['ood'], args.target_list)
+
             # Training
             t = time.time()
-            train(args, models, criterion, optimizers, schedulers, dataloaders)
+            train(args, models, criterion, optimizers, schedulers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss, O_index, cluster_centers, cluster_labels, cluster_indices)
             print("cycle: {}, elapsed time: {}".format(cycle, (time.time() - t)))
 
             # Test
@@ -120,7 +134,7 @@ if __name__ == '__main__':
 
             print('Trial {}/{} || Cycle {}/{} || Labeled IN size {}: Test acc {}'.format(
                     trial + 1, args.trial, cycle + 1, args.cycle, len(I_index), acc), flush=True)
-            if args.method == "LFOSA":
+            if args.method in ['LFOSA', 'EOAL']:
                 ood_acc = test_ood(args, models, dataloaders)
                 print('Out of domain detection acc is {}'.format(ood_acc), flush=True)
 
@@ -130,7 +144,10 @@ if __name__ == '__main__':
                                   O_index=O_index,
                                   selection_method=args.uncertainty,
                                   dataloaders=dataloaders,
-                                  cur_cycle=cycle)
+                                  cur_cycle=cycle,
+                                  cluster_centers=cluster_centers,
+                                  cluster_labels=cluster_labels,
+                                  cluster_indices=cluster_indices)
             if args.method in ["VAAL", "AlphaMixSampling"]:
                 ALmethod = methods.__dict__[args.method](args, models, train_dst, unlabeled_dst, U_index, **selection_args)
             elif args.method=="EPIG":
@@ -143,6 +160,7 @@ if __name__ == '__main__':
             I_index, O_index, U_index, in_cnt = get_sub_train_dataset(args, train_dst, I_index, O_index, U_index, Q_index, initial=False)
             print("# Labeled_in: {}, # Labeled_ood: {}, # Unlabeled: {}".format(
                 len(set(I_index)), len(set(O_index)), len(set(U_index))))
+            
 
             # Meta-training MQNet
             if args.method == 'MQNet':
@@ -155,9 +173,12 @@ if __name__ == '__main__':
             if args.dataset in ['CIFAR10', 'CIFAR100']:
                 sampler_labeled = SubsetRandomSampler(I_index)  # make indices initial to the samples
                 dataloaders['train'] = DataLoader(train_dst, sampler=sampler_labeled, batch_size=args.batch_size, num_workers=args.workers)
-                if args.method == 'LFOSA':
-                    sampler_query = SubsetRandomSampler(Q_index)  # make indices initial to the samples
-                    dataloaders['oodd'] = DataLoader(train_dst, sampler=sampler_query, batch_size=args.batch_size, num_workers=args.workers)
+                if args.method in ['LFOSA', 'EOAL']:
+                    query_Q = I_index + O_index
+                    sampler_query = SubsetRandomSampler(query_Q)  # make indices initial to the samples
+                    dataloaders['query'] = DataLoader(train_dst, sampler=sampler_query, batch_size=args.batch_size, num_workers=args.workers)
+                    ood_query = SubsetRandomSampler(O_index)  # make indices initial to the samples
+                    dataloaders['ood'] = DataLoader(train_dst, sampler=ood_query, batch_size=args.batch_size, num_workers=args.workers)
             elif args.dataset == 'ImageNet50':
                 dst_subset = torch.utils.data.Subset(train_dst, I_index)
                 train_loader = DataLoaderX(dst_subset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=False)

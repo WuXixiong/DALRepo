@@ -6,9 +6,34 @@ from utils import *
 parser = argparse.ArgumentParser(description='Parameter Processing')
 
 # new arguments
+# SAAL
+parser.add_argument('--acqMode', default='Max_Diversity', type=str, help='acquisition mode / Max (max_perturbed_loss), Diff (max_perturbed_loss-original_loss), Max_Diversity, Diff_Diversity')
+parser.add_argument('--labelMode', default='Pseudo', type=str, help='label mode / True (sharpness with true label), Pseudo (sharpness with pseudo label), InversePseudo (sharpness with inverse pseudo label')
+parser.add_argument('--rho', default=0.05, type=float, help='sharpness computation parameter')
+parser.add_argument('--pool_subset', default=2000, type=int, help='number of data points in the subset of the whole unlabelled pool')
+parser.add_argument('--pool_batch_size', default=1, type=int, help='batch_size for calculating score in pool data')
+# noise stabitity
+parser.add_argument('--ns_subset', type=int, default=25000, help="subset in noise stabitity")
+parser.add_argument('--noise_scale', type=float, default=0.001, help="noise_scale in noise stabitity")
+parser.add_argument('--addendum', type=int, default=1, help="ADDENDUM in noise stabitity")
+# EOAL
+parser.add_argument('--eoal_diversity', action='store_true', default=False, help='Whether to use diversity in EOAL')
+parser.add_argument('--lr-model', type=float, default=0.01, help="learning rate for model in EOAL")
+parser.add_argument('--w-unk-cls', type=int, default=1, help="w_unk_cls in EOAL")
+parser.add_argument('--pareta-alpha', type=float, default=0.8)
+parser.add_argument('--is-filter', type=bool, default=True)
+parser.add_argument('--is-mini', type=bool, default=True)
+parser.add_argument('--known-class', type=int, default=20)
+parser.add_argument('--modelB-T', type=float, default=1)
+parser.add_argument('--init-percent', type=int, default=16)
+parser.add_argument('--diversity', type=int, default=1)
+parser.add_argument('--reg-w', type=float, default=0.1)
+parser.add_argument('--w-ent', type=float, default=1)
 # LFOSA
 parser.add_argument('--known-T', type=float, default=0.5)
 parser.add_argument('--unknown-T', type=float, default=0.5)
+parser.add_argument('--lr-cent', type=float, default=0.5, help="learning rate for center loss")
+parser.add_argument('--weight-cent', type=float, default=0, help="weight for center loss")
 # others
 parser.add_argument('--target_per_class', type=int, default=1000, help='# of target per classes in EPIG')
 parser.add_argument('--max_iter', type=int, default=100, help='# of max iterations in Adversarialdeepfool')
