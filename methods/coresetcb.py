@@ -44,7 +44,7 @@ class CoresetCB(ALMethod):
 
     def k_center_greedy(self, labeled, unlabeled, n_query, probs):
 
-        if self.args.dataset == 'cifar10':
+        if self.args.dataset == 'CIFAR10':
             num_classes = 10
             lamda = 5
         else:

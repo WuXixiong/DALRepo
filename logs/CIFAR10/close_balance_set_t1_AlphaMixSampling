@@ -1,0 +1,29 @@
+This experiment time is:
+2024-09-26 05:31:09
+
+Experiment settings:
+AL method:AlphaMixSampling
+Dataset:CIFAR10
+Model random seed:1
+Backbone:ResNet18
+Optimizer:SGD
+Learning rate:0.1
+Weight decay:0.0005
+Gamma value for StepLR:0.5
+Step size for StepLR:50
+Number of total epochs each cycle:200
+Initial training set size:50000
+Initial test set size:10000
+Initial labeled data number:500
+
+Cycle|Test Accuracy|Number of in-domain query data
+1.0000|37.4200|500.0000
+2.0000|50.5000|500.0000
+3.0000|55.5300|500.0000
+4.0000|61.2800|500.0000
+5.0000|65.6800|500.0000
+6.0000|70.9200|500.0000
+7.0000|75.3900|500.0000
+8.0000|77.5600|500.0000
+9.0000|79.8200|500.0000
+10.0000|81.1500|500.0000

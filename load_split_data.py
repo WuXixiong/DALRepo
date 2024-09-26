@@ -7,6 +7,7 @@ from torch.utils.data.dataset import Subset
 from datasets.cifar10 import MyCIFAR10
 from datasets.cifar100 import MyCIFAR100
 from datasets.imagenet import MyImageNet
+from datasets.mnist import MyMNIST
 from torchvision import datasets
 import torchvision.transforms as T
 
@@ -57,6 +58,8 @@ def get_dataset(args, trial):
         T_normalize = T.Normalize([0.5071, 0.4867, 0.4408], [0.2675, 0.2565, 0.2761])
     elif args.dataset == 'ImageNet50':
         T_normalize = T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    elif args.dataset == 'MNIST':
+        T_normalize = T.Normalize([0.1307], [0.3081])  # Mean and std for MNIST
 
     # Transform
     if args.dataset in ['CIFAR10', 'CIFAR100']:
@@ -65,6 +68,17 @@ def get_dataset(args, trial):
     elif args.dataset == 'ImageNet50':
         train_transform = T.Compose([T.Resize(256), T.RandomCrop(224), T.RandomHorizontalFlip(), T.ToTensor(), T_normalize])
         test_transform = T.Compose([T.Resize(256), T.CenterCrop(224), T.ToTensor(), T_normalize])
+    elif args.dataset == 'MNIST':
+        train_transform = T.Compose([
+            T.RandomRotation(10),  # Randomly rotate the image by 10 degrees
+            T.RandomCrop(28, padding=4),  # Randomly crop with padding
+            T.ToTensor(),
+            T_normalize  # Normalize based on mean and std for MNIST
+        ])
+        test_transform = T.Compose([
+            T.ToTensor(),
+            T_normalize
+        ])
 
     # Dataset
     if args.dataset == 'CIFAR10':
@@ -73,12 +87,16 @@ def get_dataset(args, trial):
         train_set = MyCIFAR10(file_path, train=True, download=True, transform=train_transform)
         unlabeled_set = MyCIFAR10(file_path, train=True, download=True, transform=test_transform)
         test_set = MyCIFAR10(file_path, train=False, download=True, transform=test_transform)
-
     elif args.dataset == 'CIFAR100':
         file_path = args.data_path + '/cifar100/'
         train_set = MyCIFAR100(file_path, train=True, download=True, transform=train_transform)
         unlabeled_set = MyCIFAR100(file_path, train=True, download=True, transform=test_transform)
         test_set = MyCIFAR100(file_path, train=False, download=True, transform=test_transform)
+    elif args.dataset == 'MNIST':
+        file_path = args.data_path + '/mnist/'  # Change the folder to store MNIST data
+        train_set = MyMNIST(file_path, train=True, download=True, transform=train_transform)  # Use MyMNIST class
+        unlabeled_set = MyMNIST(file_path, train=True, download=True, transform=test_transform)  # Also using MyMNIST class
+        test_set = MyMNIST(file_path, train=False, download=True, transform=test_transform)  # For test data, use MyMNIST
     elif args.dataset == 'ImageNet50':
         # Load Preprocessed IN-classes & indices; 50 classes were randomly selected
         index_path = args.data_path + '/ImageNet50/class_indice_dict.pickle'
@@ -97,25 +115,31 @@ def get_dataset(args, trial):
     if args.dataset == 'CIFAR10':
         args.input_size = 32 * 32 * 3
         args.target_list = list(range(10))
-        # args.target_lists = [[4, 2, 5, 7], [7, 1, 2, 5], [6, 4, 3, 2], [8, 9, 1, 3], [2, 9, 5, 3]] # Randomly Selected
-        # args.target_list = [trial]
-        # args.untarget_list = list(np.setdiff1d(list(range(0, 10)), list(args.target_list)))
-        # args.num_IN_class = 4
+        args.num_IN_class = 10
         if args.openset:
             # Settings specific to when openset is True
             args.target_lists = [[4, 2, 5, 7], [7, 1, 2, 5], [6, 4, 3, 2], [8, 9, 1, 3], [2, 9, 5, 3]]
             args.target_list = args.target_lists[trial]
             args.num_IN_class = 4
-        else:
-            # Settings specific to when openset is False
-            args.target_list = list(range(10))  # Assuming you want all classes
-            args.num_IN_class = 10
-
+        # Calculate untarget_list outside the openset condition if it applies in both scenarios
+        args.untarget_list = list(np.setdiff1d(list(range(0, 10)), list(args.target_list)))
+    if args.dataset == 'MNIST':
+        args.input_size = 28 * 28 * 1
+        args.target_list = list(range(10))
+        args.num_IN_class = 10
+        if args.openset:
+            # Settings specific to when openset is True
+            args.target_lists = [[4, 2, 5, 7], [7, 1, 2, 5], [6, 4, 3, 2], [8, 9, 1, 3], [2, 9, 5, 3]]
+            args.target_list = args.target_lists[trial]
+            args.num_IN_class = 4
         # Calculate untarget_list outside the openset condition if it applies in both scenarios
         args.untarget_list = list(np.setdiff1d(list(range(0, 10)), list(args.target_list)))
     elif args.dataset == 'CIFAR100':
         args.input_size = 32 * 32 * 3
-        args.target_lists = [[69,  8, 86, 18, 68, 30, 75,  3, 63, 76, 72,  7, 50, 81, 46, 89, 22,
+        args.target_list = list(range(100))
+        args.num_IN_class = 100
+        if args.openset:
+            args.target_lists = [[69,  8, 86, 18, 68, 30, 75,  3, 63, 76, 72,  7, 50, 81, 46, 89, 22,
             93, 62, 21, 33, 98, 82, 20, 60,  5, 77,  1, 74, 88, 57, 34, 43, 27, 66, 83, 25, 48,  4, 55], \
                             [33, 10, 74, 72, 88, 47, 27, 68, 60, 75, 45, 79, 92, 35, 86, 50, 18,
             61, 49, 29, 23, 30, 67, 73, 82, 94, 13, 37, 39, 26, 62, 22, 90, 53, 89, 11,  3, 20, 70, 96], \
@@ -125,9 +149,9 @@ def get_dataset(args, trial):
             90,  1,  0, 98, 87, 94, 74, 56, 91, 23, 97, 30, 17, 53, 12, 76, 11, 25, 65, 96,  3, 45, 8], \
                             [ 0,  1,  4,  5,  7,  9, 12, 19, 21, 22, 23, 24, 38, 41, 42, 43, 46,
             47, 48, 51, 55, 59, 60, 62, 68, 73, 75, 78, 79, 80, 81, 85, 86, 90,91, 94, 95, 96, 97, 98]] # Randomly Selected
-        args.target_list = args.target_lists[trial]
+            args.target_list = args.target_lists[trial]
+            args.num_IN_class = 40
         args.untarget_list = list(np.setdiff1d(list(range(0, 100)), list(args.target_list)))
-        args.num_IN_class = 40
     elif args.dataset == 'ImageNet50':
         args.input_size = 32 * 32 * 3
         args.target_list = class_indice_dict['in_class']# SEED 1
@@ -140,7 +164,7 @@ def get_dataset(args, trial):
         args.num_IN_class = 50
 
     # class converting
-    if args.dataset in ['CIFAR10', 'CIFAR100']:
+    if args.dataset in ['CIFAR10', 'CIFAR100', 'MNIST']: # add mnist
         for i, c in enumerate(args.untarget_list):
             train_set.targets[np.where(train_set.targets == c)[0]] = int(args.n_class)
             test_set.targets[np.where(test_set.targets == c)[0]] = int(args.n_class)
@@ -172,7 +196,7 @@ def get_dataset(args, trial):
 
     # Split Check
     print("Target classes: ", args.target_list)
-    if args.dataset in ['CIFAR10', 'CIFAR100']:
+    if args.dataset in ['CIFAR10', 'CIFAR100', 'MNIST']:
         if args.method == 'EPIG':
             uni, cnt = np.unique(np.array(unlabeled_set.targets), return_counts=True)
             print("Train, # samples per class")
@@ -202,11 +226,11 @@ def get_dataset(args, trial):
     return train_set, unlabeled_set, test_set
 
 def get_superclass_list(dataset):
-    if dataset == 'cifar10':
+    if dataset == 'CIFAR10':
         return CIFAR10_SUPERCLASS
-    elif dataset == 'cifar100':
+    elif dataset == 'CIFAR100':
         return CIFAR100_SUPERCLASS
-    elif dataset == 'imagenet':
+    elif dataset == 'ImageNet30':
         return IMAGENET_SUPERCLASS
     else:
         raise NotImplementedError()
@@ -225,26 +249,27 @@ def get_subclass_dataset(dataset, classes):
 
 def get_sub_train_dataset(args, dataset, L_index, O_index, U_index, Q_index, initial= False):
     classes = args.target_list
-    #budget = args.n_query
     budget = args.n_initial
     ood_rate = args.ood_rate
 
     if initial:
-        if args.dataset in ['CIFAR10', 'CIFAR100']:
+        if args.dataset in ['CIFAR10', 'CIFAR100', 'MNIST']:
             if args.openset:
                 L_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] < len(classes)]
                 O_total = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] >= len(classes)]
 
-                n_ood = round(len(L_total) * (ood_rate / (1 - ood_rate)))
+                # n_ood = round(len(L_total) * (ood_rate / (1 - ood_rate)))
+                n_ood = round(ood_rate * (len(L_total) + len(O_total)))
+
                 if args.imbalanceset and n_ood > O_total:
                     n_ood = O_total
                 O_total = random.sample(O_total, n_ood)
                 print("# Total in: {}, ood: {}".format(len(L_total), len(O_total)))
-
-                # L_index = random.sample(L_total, int(budget * (1 - ood_rate)))
-                # O_index = random.sample(O_total, int(budget * ood_rate))
-                L_index = random.sample(L_total, int(budget))
-                O_index = random.sample(O_total, int(budget * (ood_rate / (1-ood_rate)))) # ensure the initial labelled data and initial ood data are in correct ratio
+                
+                L_index = random.sample(L_total, budget - int(budget * ood_rate))
+                O_index = random.sample(O_total, int(budget * ood_rate))
+                # L_index = random.sample(L_total, int(budget))
+                # O_index = random.sample(O_total, int(budget * (ood_rate / (1-ood_rate)))) # ensure the initial labelled data and initial ood data are in correct ratio
                 U_index = list(set(L_total + O_total) - set(L_index) - set(O_index))
                 if args.method == 'EPIG':
                     print("# Labeled in: {}, ood: {}, Unlabeled: {}".format(len(L_index), len(O_index), len(U_index) - int(args.n_class) * args.target_per_class))
@@ -300,7 +325,7 @@ def get_sub_train_dataset(args, dataset, L_index, O_index, U_index, Q_index, ini
 
 def get_sub_test_dataset(args, dataset):
     classes = args.target_list
-    if args.dataset in ['CIFAR10', 'CIFAR100']:
+    if args.dataset in ['CIFAR10', 'CIFAR100', 'MNIST']: # add 'MNIST'
         labeled_index = [dataset[i][2] for i in range(len(dataset)) if dataset[i][1] < len(classes)]
     elif args.dataset == 'ImageNet50':
         labeled_index = [dataset[i][2] for i in args.in_test_indices]

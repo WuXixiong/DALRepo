@@ -7,6 +7,7 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from copy import deepcopy
 import torch.nn.functional as F
+from torch.utils.data import Subset
 
 class VESSAL(ALMethod):
 #     def __init__(self, X, Y, idxs_lb, net, args):
@@ -21,7 +22,8 @@ class VESSAL(ALMethod):
         self.X = []
         self.Y = []
         self.zeta = self.args.zeta
-        for idx in range(len(unlabeled_dst)):
+        subset = Subset(unlabeled_dst, U_index)
+        for idx in range(len(subset)):
             data, target, _ = self.unlabeled_dst[idx]  # 获取数据和标签
             self.X.append(data)  # 将数据添加到 pool_data_dropout 列表
             self.Y.append(target)  # 将标签添加到 pool_target_dropout 列表
@@ -125,14 +127,17 @@ class VESSAL(ALMethod):
             chosen = chosen[:n]
         self.skipped.extend([idxs_unlabeled[idx] for idx in skipped])
         # self.skipped.extend(idxs_unlabeled[skipped])
-
-        result = idxs_unlabeled[chosen]
+        # 将 idxs_unlabeled 转换为 numpy 数组
+        idxs_unlabeled_np = np.array(idxs_unlabeled)
+        # 使用 chosen 列表进行索引
+        result = idxs_unlabeled_np[chosen]
+        #result = idxs_unlabeled[chosen]
         if self.args.fill_random:
             # If less than n samples where selected, fill is with random samples.
             if len(chosen) < n:
                 labelled = np.copy(self.idxs_lb)
                 labelled[idxs_unlabeled[chosen]] = True
-                remaining_unlabelled = np.arange(self.n_pool)[~labelled]
+                remaining_unlabelled = np.arange(len(self.U_index))[~labelled]
                 n_random = n - len(chosen)
                 fillers = remaining_unlabelled[np.random.permutation(len(remaining_unlabelled))][:n_random]
                 result = np.concatenate([idxs_unlabeled[chosen], fillers], axis=0)
@@ -175,6 +180,8 @@ class VESSAL(ALMethod):
                         order = np.argsort(batchProbs[j])[::-1]
                         probs = batchProbs[j][order]
                         fakeLab = order[ind]
+                        if idxs[j] >= len(Y): # prevent to beyond bound
+                                break
                         for c in range(nLab):
                             if c == ind:
                                 embedding[idxs[j]][ind][embDim * c : embDim * (c+1)] = deepcopy(out[j]) * (1 - probs[c])

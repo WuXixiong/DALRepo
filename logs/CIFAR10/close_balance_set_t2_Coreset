@@ -1,0 +1,20 @@
+This experiment time is:
+2024-09-25 14:45:04
+
+Experiment settings:
+AL method:Coreset
+Dataset:CIFAR10
+Backbone:ResNet18
+Model random seed:2
+Optimizer:SGD
+Learning rate:0.1
+Weight decay:0.0005
+Gamma value for StepLR:0.5
+Step size for StepLR:50
+Number of total epochs each cycle:100
+Initial training set size:50000
+Initial test set size:10000
+Initial labeled data number:20
+
+Cycle|Test Accuracy|Number of in-domain query data
+1.0000|18.5100|1.0000

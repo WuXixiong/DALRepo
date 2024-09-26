@@ -15,6 +15,8 @@ from methods.methods_utils.ccal_util import *
 from methods.methods_utils.simclr import semantic_train_epoch
 from methods.methods_utils.simclr_CSI import csi_train_epoch
 
+from copy import deepcopy
+
 # LFOSA
 class CenterLoss(nn.Module):
     """Center loss.
@@ -58,6 +60,65 @@ class CenterLoss(nn.Module):
         loss = dist.clamp(min=1e-12, max=1e+12).sum() / batch_size
 
         return loss
+
+# PAL
+class ModelEMA(object):
+    def __init__(self, args, model, decay):
+        self.ema = deepcopy(model)
+        self.ema.to(args.device)
+        self.ema.eval()
+        self.decay = decay
+        self.ema_has_module = hasattr(self.ema, 'module')
+        self.param_keys = [k for k, _ in self.ema.named_parameters()]
+        self.buffer_keys = [k for k, _ in self.ema.named_buffers()]
+        for p in self.ema.parameters():
+            p.requires_grad_(False)
+
+    def update(self, model):
+        needs_module = hasattr(model, 'module') and not self.ema_has_module
+        with torch.no_grad():
+            msd = model.state_dict()
+            esd = self.ema.state_dict()
+            for k in self.param_keys:
+                if needs_module:
+                    j = 'module.' + k
+                else:
+                    j = k
+                model_v = msd[j].detach()
+                ema_v = esd[k]
+                esd[k].copy_(ema_v * self.decay + (1. - self.decay) * model_v)
+
+            for k in self.buffer_keys:
+                if needs_module:
+                    j = 'module.' + k
+                else:
+                    j = k
+                esd[k].copy_(msd[j])
+
+class WNet(nn.Module):
+    def __init__(self, input, hidden, output):
+        super(WNet, self).__init__()
+        self.linear1 = nn.Linear(input, hidden)
+        self.relu = nn.ReLU(inplace=True)
+        self.linear2 = nn.Linear(hidden, output)
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        out = self.linear2(x)
+        return torch.sigmoid(out)
+
+def set_Wnet(args, classes):
+    wnet = WNet(classes, 512, 1).to(args.device)
+    no_decay = ['bias', 'bn']
+    grouped_parameters = [
+    {'params': [p for n, p in wnet.named_parameters() if not any(
+        nd in n for nd in no_decay)], 'weight_decay': args.wdecay},
+    {'params': [p for n, p in wnet.named_parameters() if any(
+        nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    ]
+    optimizer_wnet = torch.optim.Adam(grouped_parameters, lr=args.lr_wnet)
+    return wnet, optimizer_wnet
 
 class DataLoaderX(torch.utils.data.DataLoader):
     def __iter__(self):
@@ -438,23 +499,32 @@ def train_epoch_eoal(args, models, criterion, optimizers, dataloaders, criterion
         inputs, labels, indexes = data[0].to(args.device), data[1].to(args.device), data[2].to(args.device)
         T = torch.tensor([args.known_T] * labels.shape[0], dtype=torch.float32).to(args.device)
         labels = lab_conv(args.target_list, labels) # labels = lab_conv(knownclass, labels)
-        features, outputs = models['ood_detection'](inputs) # outputs, features
+        outputs, features = models['ood_detection'](inputs) # outputs, features
         out_open = models['model_bc'](features) # orginally features not outputs, maybe because of the different network structure
         out_open = out_open.view(features.size(0), 2, -1) # outputs.size(0)
         # ent = open_entropy(out_open)
         labels_unk = []
+        print(len(labels))
         for i in range(len(labels)):
             # Annotate "unknown"
             if labels[i] not in args.target_list:
                 T[i] = args.unknown_T
                 tmp_idx = indexes[i]
+                cluster_indices = list(cluster_indices)
+                tmp_idx = int(tmp_idx)
+                print(cluster_indices.index(tmp_idx))
                 tmp_idx = torch.tensor(tmp_idx).to(args.device)
-                if cluster_indices is None:
-                    continue
+                tmp_idx = tmp_idx.long()
+                cluster_indices = cluster_indices.long()
                 cluster_indices = torch.tensor(cluster_indices).to(args.device)
                 loc = torch.where(cluster_indices == tmp_idx)[0]
-                loc = loc.cpu() 
+                loc = loc.cpu()
+                print(f"tmp_idx: {tmp_idx}")
+                print(f"max cluster_indices: {max(cluster_indices)}")
+                print(f"min cluster_indices: {min(cluster_indices)}")
                 labels_unk += list(np.array(cluster_labels[loc].cpu().data)) 
+        print('labels_unk???')
+        print(labels_unk)
         labels_unk = torch.tensor(labels_unk).to(args.device)
         open_loss_pos, open_loss_neg, open_loss_pos_ood, open_loss_neg_ood = entropic_bc_loss(out_open, labels, args.pareta_alpha, args.num_IN_class, len(invalidList), args.w_ent)
 
@@ -485,8 +555,178 @@ def train_epoch_eoal(args, models, criterion, optimizers, dataloaders, criterion
         if len(invalidList) > 0:
             k_losses.update(regu_loss.item(), labels.size(0))
 
+# def train_pal_cls_epoch(args, models, criterion, optimizers, dataloaders, ema_model):
+#     models['backbone'].train()
 
-def train(args, models, criterion, optimizers, schedulers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss, O_index, cluster_centers, cluster_labels, cluster_indices):
+#     for data in dataloaders['train']:
+#         inputs, labels = data[0].to(args.device), data[1].to(args.device)
+
+#         optimizers['backbone'].zero_grad()
+
+#         scores, features = models['backbone'](inputs)
+#         # lx = criterion(scores, labels)
+#         lx = F.cross_entropy(scores, labels, reduction='mean')
+#         lo = ova_loss(features, labels)
+#         target_loss = lx + lo
+#         m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
+
+#         loss = m_backbone_loss
+#         loss.backward()
+#         optimizers['backbone'].step()
+#         if args.use_ema:
+#             ema_model.update(models['backbone'])
+    
+#     return models['backbone'], ema_model
+
+def train_pal_cls_epoch(args, models, optimizers, dataloaders, ema_model):
+    # if not args.no_progress:
+    #     p_bar = tqdm(range(args.eval_step),
+    #                 disable=args.local_rank not in [-1, 0])
+    # output_args["CLS"] = 'True'
+    # output_args["Meta"] = 'False'
+    # output_args["Hat"] = '0'
+    # output_args["Wet"] = '0'
+    # c_s_time = time.time()
+    #for _ in range(args.eval_step):
+    losses = AverageMeter("losses")
+    losses_x = AverageMeter("losses_x")
+    models['backbone'].train()
+    for train_data in dataloaders['train']:
+        # ## Data loading
+        # try:
+        #     feature_id, targets_x, index_x = labeled_iter.__next__()
+        # except:
+        #     if args.world_size > 1:
+        #         labeled_epoch += 1
+        #         labeled_trainloader.sampler.set_epoch(labeled_epoch)
+        #     labeled_iter = iter(labeled_trainloader)
+        #     feature_id, targets_x, index_x = labeled_iter.__next__()
+        feature_id, targets_x, index_x = train_data
+
+        b_size = feature_id.shape[0]
+        input_l = feature_id.to(args.device)
+        targets_x = targets_x.to(args.device)
+
+        ## Feed data
+        # logits, logits_open = model(input_l)
+        logits, logits_open = models['backbone'](input_l)
+        ## Loss for labeled samples
+        Lx = F.cross_entropy(logits[:b_size],
+                                targets_x, reduction='mean')
+        Lo = ova_loss(logits_open[:b_size], targets_x)
+        loss = Lx + Lo
+        loss.backward()
+
+        losses.update(loss.item())
+        losses_x.update(Lx.item())
+
+        # output_args["batch"] = batch_idx
+        # output_args["loss_x"] = losses_x.avg
+        # output_args["lr"] = [group["lr"] for group in optimizer.param_groups][0]
+
+        # optimizer.step()
+        optimizers['backbone'].step()
+        # if args.opt != 'adam':
+        #     scheduler.step()
+        if args.use_ema:
+            ema_model.update(models['backbone'])
+        models['backbone'].zero_grad()
+    #     if not args.no_progress:
+    #         p_bar.set_description(default_out.format(**output_args))
+    #         p_bar.update()
+    
+    # c_e_time = time.time()
+
+    # c_time = (c_e_time - c_s_time)/ 60
+    # if not args.no_progress:
+    #     p_bar.close()
+    # return models['backbone'], ema_model
+
+def train_pal_meta_epoch(args, models, optimizers, dataloaders, coef, wnet, optimizer_wnet):
+    losses_hat = AverageMeter("losses_hat")
+    losses_wet = AverageMeter("losses_wet")
+    losses_ova = AverageMeter("losses_ova")
+    meta_model = models['ood_detection']
+    meta_model.train()
+
+    for _ in range(args.meta_step):
+        # try:
+        #     feature_id, targets_x, index_x = labeled_iter.__next__()
+        # except:
+        #     if args.world_size > 1:
+        #         labeled_epoch += 1
+        #         labeled_trainloader.sampler.set_epoch(labeled_epoch)
+        #     labeled_iter = iter(labeled_trainloader)
+        #     feature_id, targets_x, index_x = labeled_iter.__next__()
+        # try:
+        #     feature_al, _, _ = unlabeled_all_iter.__next__()
+        # except:
+        #     unlabeled_all_iter = iter(unlabeled_trainloader_all)
+        #     feature_al, _, _ = unlabeled_all_iter.__next__()
+
+        # feature_id, targets_x, _ = next(iter(dataloader['train']))
+        # feature_al, _, _ = next(iter(dataloader['unlabeled']))
+
+        labeled_iter = iter(dataloaders['train'])
+        unlabeled_iter = iter(dataloaders['unlabeled'])
+        try:
+            # 获取下一个 labeled 数据
+            feature_id, targets_x, _ = next(labeled_iter)
+        except StopIteration:
+            # 重新初始化迭代器并继续
+            labeled_iter = iter(dataloaders['train'])
+            feature_id, targets_x, _ = next(labeled_iter)
+        try:
+            # 获取下一个 unlabeled 数据
+            feature_al, _, _ = next(unlabeled_iter)
+        except StopIteration:
+            # 重新初始化迭代器并继续
+            unlabeled_iter = iter(dataloaders['unlabeled'])
+            feature_al, _, _ = next(unlabeled_iter)
+        b_size = feature_id.shape[0]
+        inputs_all = feature_al
+        inputs = torch.cat([feature_id, inputs_all], 0).to(args.device)
+        input_l = feature_id.to(args.device)
+        targets_x = targets_x.to(args.device)
+        logits, logits_open = meta_model(inputs, method='PAL')
+        logits_open_w = logits_open[b_size:]
+        weight = wnet(logits_open_w)
+
+        norm = torch.sum(weight)
+        Lx = F.cross_entropy(logits[:b_size],
+                                targets_x, reduction='mean')
+        Lo = ova_loss(logits_open[:b_size], targets_x)
+        losses_ova.update(Lo.item())
+        L_o_u1, cost_w = ova_ent(logits_open_w)
+        cost_w = torch.reshape(cost_w, (len(cost_w),1))
+        if norm != 0:
+            loss_hat =  Lx + coef * (torch.sum(weight * cost_w)/norm + Lo)
+
+        else:
+            loss_hat =  Lx + coef * (torch.sum(weight * cost_w) + Lo)
+
+        meta_model.zero_grad()
+        loss_hat.backward()
+        # meta_opt.step()
+        optimizers['ood_detection'].step()
+
+        losses_hat.update(loss_hat.item())
+        y_l_hat, _ = meta_model(input_l, method='PAL')
+        L_cls = F.cross_entropy(y_l_hat[:b_size],
+                                targets_x, reduction='mean')
+        
+        #compute upper level objective
+        optimizer_wnet.zero_grad()
+        L_cls.backward()
+        optimizer_wnet.step()
+        losses_wet.update(L_cls.item())
+        # output_args["loss_hat"] = losses_hat.avg
+        # output_args["loss_wet"] = losses_wet.avg
+
+    # return meta_model
+
+
+def train(args, models, criterion, optimizers, schedulers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss, O_index, cluster_centers, cluster_labels, cluster_indices, wnet, optimizer_wnet):
     print('>> Train a Model.')
     # print("num_epochs: {}, steps_per_epoch: {}, total_update: {}".format(
     #         args.epochs, args.steps_per_epoch, int(args.epochs*args.steps_per_epoch)) )
@@ -495,6 +735,19 @@ def train(args, models, criterion, optimizers, schedulers, dataloaders, criterio
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
             train_epoch(args, models, criterion, optimizers, dataloaders)
             schedulers['backbone'].step()
+    
+    elif args.method == 'PAL':
+        # ood_num = (args.num_IN_class+1)*2
+        # wnet, optimizer_wnet = set_Wnet(args, ood_num)
+        wnet.train()
+        if args.use_ema:
+            ema_model = ModelEMA(args, models['backbone'], args.ema_decay)
+        for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
+            coef = math.exp(-5 * (min(1 - epoch/args.epochs, 1)) ** 2)
+            train_pal_meta_epoch(args, models, optimizers, dataloaders, coef, wnet, optimizer_wnet)
+            train_pal_cls_epoch(args, models, optimizers, dataloaders, ema_model)
+            schedulers['backbone'].step()
+
     
     elif args.method in ['LFOSA', 'EOAL']: #LFOSA, EOAL
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
@@ -633,6 +886,11 @@ def get_more_args(args):
         args.im_size = (32, 32)
         #args.num_IN_class = 4
 
+    elif args.dataset == 'MNIST':
+        args.channel = 1
+        args.im_size = (28, 28)
+        #args.num_IN_class = 40
+
     elif args.dataset == 'CIFAR100':
         args.channel = 3
         args.im_size = (32, 32)
@@ -720,7 +978,7 @@ def get_models(args, nets, model, models):
             models['module'] = loss_module
 
     #LfOSA, EOAL
-    elif args.method in ['LFOSA', 'EOAL']:
+    elif args.method in ['LFOSA', 'EOAL', 'PAL']:
         backbone = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device)
         ood_detection = nets.__dict__[model](args.channel, args.num_IN_class+1, args.im_size).to(args.device) # the 1 more class for predict unknown
 
@@ -758,7 +1016,7 @@ def get_optim_configurations(args, models):
     if args.optimizer == "SGD":
         optimizer = torch.optim.SGD(models['backbone'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
-        if args.method in ['LFOSA', 'EOAL']:
+        if args.method in ['LFOSA', 'EOAL', 'PAL']:
             optimizer_ood = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
             if args.method == 'EOAL':
@@ -766,7 +1024,7 @@ def get_optim_configurations(args, models):
                 optim_C = torch.optim.SGD(params_bc, lr=args.lr_model, momentum=0.9, weight_decay=0.0005, nesterov=True)
     elif args.optimizer == "Adam":
         optimizer = torch.optim.Adam(models['backbone'].parameters(), args.lr, weight_decay=args.weight_decay)
-        if args.method in ['LFOSA', 'EOAL']:
+        if args.method in ['LFOSA', 'EOAL', 'PAL']:
             optimizer_ood = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
             if args.method == 'EOAL':
@@ -775,7 +1033,7 @@ def get_optim_configurations(args, models):
     else:
         optimizer = torch.optim.__dict__[args.optimizer](models['backbone'].parameters(), args.lr, momentum=args.momentum,
                                                          weight_decay=args.weight_decay)
-        if args.method in ['LFOSA', 'EOAL']:
+        if args.method in ['LFOSA', 'EOAL', 'PAL']:
             optimizer_ood = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
             if args.method == 'EOAL':
@@ -785,19 +1043,19 @@ def get_optim_configurations(args, models):
     # LR scheduler
     if args.scheduler == "CosineAnnealingLR":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, eta_min=args.min_lr)
-        if args.method in ['LFOSA', 'EOAL']:
+        if args.method in ['LFOSA', 'EOAL', 'PAL']:
             scheduler_ood = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_ood, args.epochs, eta_min=args.min_lr)
     elif args.scheduler == "StepLR":
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
-        if args.method in ['LFOSA', 'EOAL']:
+        if args.method in ['LFOSA', 'EOAL', 'PAL']:
             scheduler_ood = torch.optim.lr_scheduler.StepLR(optimizer_ood, step_size=args.step_size, gamma=args.gamma)
     elif args.scheduler == "MultiStepLR":
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestone)
-        if args.method in ['LFOSA', 'EOAL']:
+        if args.method in ['LFOSA', 'EOAL', 'PAL']:
             scheduler_ood = torch.optim.lr_scheduler.MultiStepLR(optimizer_ood, milestones=args.milestone)
     else:
         scheduler = torch.optim.lr_scheduler.__dict__[args.scheduler](optimizer)
-        if args.method in ['LFOSA', 'EOAL']:
+        if args.method in ['LFOSA', 'EOAL', 'PAL']:
             scheduler_ood = torch.optim.lr_scheduler.__dict__[args.scheduler](optimizer_ood)
 
     # Normal
@@ -841,7 +1099,7 @@ def get_optim_configurations(args, models):
         schedulers = {'backbone': scheduler, 'module': sched_module, 'csi': scheduler_warmup_csi}
     
     # lfosa
-    elif args.method in ['LFOSA', 'EOAL']:
+    elif args.method in ['LFOSA', 'EOAL', 'PAL']:
         optimizers = {'backbone': optimizer, 'ood_detection': optimizer_ood}
         schedulers = {'backbone': scheduler, 'ood_detection': scheduler_ood}
         if args.method == 'EOAL':
@@ -960,6 +1218,7 @@ def reg_loss(features, labels, cluster_centers, cluster_labels, num_classes):
     u_ent = -torch.sum(pu*torch.log(pu+1e-20), 1)
     true = torch.gather(uk_dists, 1, cluster_labels.long().view(-1, 1)).view(-1)
     print(f"cluster_labels size: {len(cluster_labels)}, uk_dists size: {len(uk_dists)}")
+
     non_gt = torch.tensor([[i for i in range(len(cluster_centers)) if cluster_labels[x] != i] for x in range(len(uk_dists))]).long().cuda()
     # non_gt = torch.tensor([[i for i in range(len(cluster_centers)) if x < len(cluster_labels) and cluster_labels[x] != i] for x in range(len(uk_dists))]).long().cuda()
     others = torch.gather(uk_dists, 1, non_gt)
@@ -968,3 +1227,34 @@ def reg_loss(features, labels, cluster_centers, cluster_labels, num_classes):
     inter_loss = torch.mean(torch.log(1+torch.sum(inter_loss, dim = 1)))
     loss = 0.1*intra_loss + 1*inter_loss
     return loss, k_ent.sum(), u_ent.sum()
+
+# PAL
+def ova_loss(logits_open, label):
+    logits_open = logits_open.view(logits_open.size(0), 2, -1)
+    logits_open = F.softmax(logits_open, 1)
+    label_s_sp = torch.zeros((logits_open.size(0),
+                              logits_open.size(2))).long().to(label.device)
+    label_range = torch.arange(0, logits_open.size(0)).long()
+    label_s_sp[label_range, label] = 1
+    label_sp_neg = 1 - label_s_sp
+    open_loss = torch.mean(torch.sum(-torch.log(logits_open[:, 1, :]
+                                                + 1e-8) * label_s_sp, 1))
+    open_loss_neg = torch.mean(torch.max(-torch.log(logits_open[:, 0, :]
+                                                    + 1e-8) * label_sp_neg, 1)[0])
+    open_l = torch.sum(-torch.log(logits_open[:, 1, :]
+                                                + 1e-8) * label_s_sp, 1)
+    open_l_neg = torch.max(-torch.log(logits_open[:, 0, :]
+                                                    + 1e-8) * label_sp_neg, 1)[0]
+    # print(open_l.shape)
+    # print(open_l_neg.shape)
+    Lo = open_loss_neg + open_loss
+    return Lo
+
+def ova_ent(logits_open):
+    logits_open = logits_open.view(logits_open.size(0), 2, -1)
+    logits_open = F.softmax(logits_open, 1)
+    Le = torch.mean(torch.mean(torch.sum(-logits_open *
+                                   torch.log(logits_open + 1e-8), 1), 1))
+    L_c = torch.mean(torch.sum(-logits_open *
+                                   torch.log(logits_open + 1e-8), 1), 1)
+    return Le, L_c

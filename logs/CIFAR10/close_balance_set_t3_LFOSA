@@ -1,0 +1,29 @@
+This experiment time is:
+2024-09-26 13:13:02
+
+Experiment settings:
+AL method:LFOSA
+Dataset:CIFAR10
+Model random seed:3
+Backbone:ResNet18
+Optimizer:SGD
+Learning rate:0.1
+Weight decay:0.0005
+Gamma value for StepLR:0.5
+Step size for StepLR:50
+Number of total epochs each cycle:200
+Initial training set size:50000
+Initial test set size:10000
+Initial labeled data number:500
+
+Cycle|Test Accuracy|Number of in-domain query data
+1.0000|39.2400|500.0000
+2.0000|44.4100|500.0000
+3.0000|52.5000|500.0000
+4.0000|51.1100|500.0000
+5.0000|54.4900|500.0000
+6.0000|58.2800|500.0000
+7.0000|60.1100|500.0000
+8.0000|61.1400|500.0000
+9.0000|68.7200|500.0000
+10.0000|66.6400|500.0000

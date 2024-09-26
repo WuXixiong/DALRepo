@@ -64,7 +64,6 @@ class Bottleneck(nn.Module):
         out = F.relu(out)
         return out
 
-
 class ResNet_32x32(nn.Module):
     def __init__(self, block, num_blocks, channel=3, num_classes=10, record_embedding: bool = False,
                  no_grad: bool = False):
@@ -82,6 +81,12 @@ class ResNet_32x32(nn.Module):
 
         self.embedding_recorder = EmbeddingRecorder(record_embedding)
         self.no_grad = no_grad
+
+        widen_factor = 8
+        channels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
+        self.fc = nn.Linear(channels[3], num_classes)
+        out_open = 2 * num_classes
+        self.fc_open = nn.Linear(channels[3], out_open, bias=False)
 
     def get_last_layer(self):
         return self.linear
@@ -104,6 +109,8 @@ class ResNet_32x32(nn.Module):
             out = F.avg_pool2d(out4, 4)
             out_cnn = out.view(out.size(0), -1)
             out = self.embedding_recorder(out_cnn)
+            if method=='PAL':
+                return self.fc(out), self.fc_open(out)
             out = self.linear(out)
 
             if method=='TIDAL':

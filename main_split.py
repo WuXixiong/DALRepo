@@ -22,9 +22,14 @@ import nets
 import methods as methods
 
 # Seed
-random.seed(0)
-torch.manual_seed(0)
-torch.backends.cudnn.deterministic = True
+# random_seed = 0
+# # random.seed(0)
+# # torch.manual_seed(0)
+# random.seed(random_seed)
+# np.random.seed(random_seed)  # 如果用到 NumPy 的随机函数
+# torch.manual_seed(random_seed)  # 为 PyTorch 设置随机种子
+# torch.cuda.manual_seed_all(random_seed)  # 如果使用了 GPU
+# torch.backends.cudnn.deterministic = True
 
 from collections import defaultdict
 
@@ -38,6 +43,15 @@ if __name__ == '__main__':
     # Runs on Different Class-splits
     for trial in range(args.trial):
         print("=============================Trial: {}=============================".format(trial + 1))
+
+        # 设置随机数种子，保证每次 trial 一致性
+        random_seed = args.seed
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+        torch.manual_seed(random_seed)
+        torch.cuda.manual_seed_all(random_seed)
+        torch.backends.cudnn.deterministic = True
+
         train_dst, unlabeled_dst, test_dst = get_dataset(args, trial)
 
         # Initialize a labeled dataset by randomly sampling K=1,000 points from the entire dataset.
@@ -71,25 +85,27 @@ if __name__ == '__main__':
         test_I_index = get_sub_test_dataset(args, test_dst)
 
         # DataLoaders
-        if args.dataset in ['CIFAR10', 'CIFAR100']:
+        if args.dataset in ['CIFAR10', 'CIFAR100', 'MNIST']: # ADD MNIST
             sampler_labeled = SubsetRandomSampler(I_index)  # make indices initial to the samples
             sampler_test = SubsetSequentialSampler(test_I_index)
             train_loader = DataLoader(train_dst, sampler=sampler_labeled, batch_size=args.batch_size, num_workers=args.workers)
             test_loader = DataLoader(test_dst, sampler=sampler_test, batch_size=args.test_batch_size, num_workers=args.workers)
-            if args.method in ['LFOSA', 'EOAL']:
+            if args.method in ['LFOSA', 'EOAL', 'PAL']:
                 ood_detection_index = I_index + O_index
                 sampler_ood = SubsetRandomSampler(O_index)  # make indices initial to the samples
                 sampler_query = SubsetRandomSampler(ood_detection_index)  # make indices initial to the samples
                 query_loader = DataLoader(train_dst, sampler=sampler_labeled, batch_size=args.batch_size, num_workers=args.workers)
                 ood_dataloader = DataLoader(train_dst, sampler=sampler_ood, batch_size=args.batch_size, num_workers=args.workers)
+                sampler_unlabeled = SubsetRandomSampler(U_index)
+                unlabeled_loader = DataLoader(train_dst, sampler=sampler_unlabeled, batch_size=args.batch_size, num_workers=args.workers)
         elif args.dataset == 'ImageNet50': # DataLoaderX for efficiency
             dst_subset = torch.utils.data.Subset(train_dst, I_index)
             dst_test = torch.utils.data.Subset(test_dst, test_I_index)
             train_loader = DataLoaderX(dst_subset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=False)
             test_loader = DataLoaderX(dst_test, batch_size=args.test_batch_size, shuffle=False, num_workers=args.workers, pin_memory=False)
         dataloaders = {'train': train_loader, 'test': test_loader}
-        if args.method in ['LFOSA', 'EOAL']:
-            dataloaders = {'train': train_loader, 'query': query_loader, 'test': test_loader, 'ood': ood_dataloader}
+        if args.method in ['LFOSA', 'EOAL', 'PAL']:
+            dataloaders = {'train': train_loader, 'query': query_loader, 'test': test_loader, 'ood': ood_dataloader, 'unlabeled': unlabeled_loader}
 
         # Active learning
         logs = []
@@ -97,37 +113,65 @@ if __name__ == '__main__':
         logs.append(["This experiment time is:"])
         logs.append([current_time])
         logs.append([])
-        logs.append(['Test Accuracy', 'Number of in-domain query data'])
+        logs.append(["Experiment settings:"])
+        if args.method == 'Uncertainty':
+            logs.append(["AL method:"+args.uncertainty])
+        else:
+            logs.append(["AL method:"+args.method])
+        logs.append(["Dataset:"+args.dataset])
+        logs.append(["Model random seed:"+str(args.seed + trial)])
+        logs.append(["Backbone:"+args.model])
+        logs.append(["Optimizer:"+args.optimizer])
+        logs.append(["Learning rate:"+str(args.lr)])
+        logs.append(["Weight decay:"+str(args.weight_decay)])
+        logs.append(["Gamma value for StepLR:"+str(args.gamma)])
+        logs.append(["Step size for StepLR:"+str(args.step_size)])
+        logs.append(["Number of total epochs each cycle:"+str(args.epochs)])
+        logs.append(["Initial training set size:"+str(len(train_dst))])
+        logs.append(["Initial test set size:"+str(len(test_dst))])
+        logs.append(["Initial labeled data number:"+str(args.n_initial)])
+        logs.append([])
+        logs.append(['Cycle', 'Test Accuracy', 'Number of in-domain query data'])
 
         models = None
 
         for cycle in range(args.cycle):
             print("====================Cycle: {}====================".format(cycle + 1))
             # Model (re)initialization
+            random_seed = args.seed + trial
+            random.seed(random_seed)
+            np.random.seed(random_seed)
+            torch.manual_seed(random_seed)
+            torch.cuda.manual_seed_all(random_seed)
+            torch.backends.cudnn.deterministic = True
+
             print("| Training on model %s" % args.model)
             models = get_models(args, nets, args.model, models)
             torch.backends.cudnn.benchmark = False
-
             # Loss, criterion and scheduler (re)initialization
             criterion, optimizers, schedulers = get_optim_configurations(args, models)
+
             # for LFOSA and EOAL...
             criterion_xent = nn.CrossEntropyLoss()
             # criterion_cent = CenterLoss(num_classes=args.num_IN_class, feat_dim=args.num_IN_class,use_gpu=True)
             criterion_cent = CenterLoss(num_classes=args.num_IN_class+1, feat_dim=512,use_gpu=True) # feat_dim = first dim of feature (output,feature from model return)
             optimizer_centloss = torch.optim.SGD(criterion_cent.parameters(), lr=args.lr_cent)
+            # PAL wnet
+            ood_num = (args.num_IN_class+1)*2
+            wnet, optimizer_wnet = set_Wnet(args, ood_num)
 
             # Self-supervised Training (for CCAL and MQ-Net with CSI)
             if cycle == 0:
                 models = self_sup_train(args, trial, models, optimizers, schedulers, train_dst, I_index, O_index, U_index)
 
             # EOAL
-            cluster_centers, cluster_labels, cluster_indices = None, None, None
-            if cycle > 0 and args.method == 'EOAL':
+            cluster_centers, cluster_labels, cluster_indices = [], [], []
+            if args.method == 'EOAL': # cycle > 0 and
                 cluster_centers, _, cluster_labels, cluster_indices = unknown_clustering(args, models['ood_detection'], models['model_bc'], dataloaders['ood'], args.target_list)
 
             # Training
             t = time.time()
-            train(args, models, criterion, optimizers, schedulers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss, O_index, cluster_centers, cluster_labels, cluster_indices)
+            train(args, models, criterion, optimizers, schedulers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss, O_index, cluster_centers, cluster_labels, cluster_indices, wnet, optimizer_wnet)
             print("cycle: {}, elapsed time: {}".format(cycle, (time.time() - t)))
 
             # Test
@@ -135,7 +179,7 @@ if __name__ == '__main__':
 
             print('Trial {}/{} || Cycle {}/{} || Labeled IN size {}: Test acc {}'.format(
                     trial + 1, args.trial, cycle + 1, args.cycle, len(I_index), acc), flush=True)
-            if args.method in ['LFOSA', 'EOAL']:
+            if args.method in ['LFOSA', 'EOAL', 'PAL']:
                 ood_acc = test_ood(args, models, dataloaders)
                 print('Out of domain detection acc is {}'.format(ood_acc), flush=True)
 
@@ -148,7 +192,8 @@ if __name__ == '__main__':
                                   cur_cycle=cycle,
                                   cluster_centers=cluster_centers,
                                   cluster_labels=cluster_labels,
-                                  cluster_indices=cluster_indices)
+                                  cluster_indices=cluster_indices,
+                                  wnet=wnet)
             if args.method in ["VAAL", "AlphaMixSampling"]:
                 ALmethod = methods.__dict__[args.method](args, models, train_dst, unlabeled_dst, U_index, **selection_args)
             elif args.method=="EPIG":
@@ -171,10 +216,10 @@ if __name__ == '__main__':
                 models = meta_train(args, models, optimizers, schedulers, criterion, dataloaders['train'], unlabeled_loader, delta_loader)
 
             # Update trainloader
-            if args.dataset in ['CIFAR10', 'CIFAR100']:
+            if args.dataset in ['CIFAR10', 'CIFAR100', 'MNIST']:
                 sampler_labeled = SubsetRandomSampler(I_index)  # make indices initial to the samples
                 dataloaders['train'] = DataLoader(train_dst, sampler=sampler_labeled, batch_size=args.batch_size, num_workers=args.workers)
-                if args.method in ['LFOSA', 'EOAL']:
+                if args.method in ['LFOSA', 'EOAL', 'PAL']:
                     query_Q = I_index + O_index
                     sampler_query = SubsetRandomSampler(query_Q)  # make indices initial to the samples
                     dataloaders['query'] = DataLoader(train_dst, sampler=sampler_query, batch_size=args.batch_size, num_workers=args.workers)
@@ -185,15 +230,17 @@ if __name__ == '__main__':
                 train_loader = DataLoaderX(dst_subset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=False)
 
             # save logs
-            logs.append([acc, in_cnt])
+            logs.append([cycle + 1, acc, in_cnt])
 
         print("====================Logs, Trial {}====================".format(trial + 1))
         # logs = np.array(logs).reshape((-1, 2))
         logs = [logs[i:i+2] for i in range(0, len(logs), 2)]
         # logs = logs.tolist() # convert back to list to append more information
         print(logs, flush=True)
-
         file_name = 'logs/'+str(args.dataset)+'/r'+str(args.ood_rate)+'_t'+str(trial)+'_'+str(args.method)
+    
+        if not args.openset and not args.imbalanceset:
+            file_name = 'logs/'+str(args.dataset)+'/close_balance_set'+'_t'+str(trial)+'_'+str(args.method)
         if args.method == 'MQNet':
             file_name = file_name+'_'+str(args.mqnet_mode)+'_v3_b64'
         

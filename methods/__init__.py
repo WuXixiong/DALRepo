@@ -19,3 +19,4 @@ from .eoal import *
 from .noise_stability import *
 from .saal import *
 from .vessal import *
+from .pal import *
