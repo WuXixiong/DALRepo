@@ -3,19 +3,21 @@ import torch
 import numpy as np
 from tqdm import tqdm
 
-import nets
-
 class TIDAL(ALMethod):
     '''
     https://github.com/hyperconnect/TiDAL
     '''
     def __init__(self, args, models, unlabeled_dst, U_index, **kwargs):
         super().__init__(args, models, unlabeled_dst, U_index, **kwargs)
+        # subset selection (for diversity)
+        subset_idx = np.random.choice(len(self.U_index), size=(min(self.args.subset, len(self.U_index)),), replace=False)
+        self.U_index_sub = np.array(self.U_index)[subset_idx]
 
     def select(self, **kwargs):
         scores = self.rank_uncertainty()
-        selected_indices = np.argsort(scores)[:self.args.n_query]
-        Q_index = [self.U_index[idx] for idx in selected_indices]
+        selected_indices = np.argsort(-scores)[:self.args.n_query]
+        # Q_index = [self.U_index[idx] for idx in selected_indices]
+        Q_index = self.U_index_sub[selected_indices]
 
         return Q_index, scores
 
@@ -27,17 +29,19 @@ class TIDAL(ALMethod):
         print("| Calculating uncertainty of Unlabeled set")
 
         uncertainties = self.get_cumulative_entropy(self.models, selection_loader, self.args)
-        uncertainties_np = -uncertainties.cpu().numpy()  # 取负
+        uncertainties_np = uncertainties.cpu().numpy()  # 取负
         scores= np.append(scores, uncertainties_np)
 
         return scores
 
     def get_cumulative_entropy(self, models, unlabeled_loader, args):
         models['backbone'].eval()
-        # models['module'].eval()
-        test_models = nets.tdnet.TDNet()
-        test_models = test_models.cuda()
-        test_models.eval()
+        models['module'].eval()
+        models['module'].cuda()
+        #test_models = nets.tdnet.TDNet()
+        #test_models = test_models.cuda()
+        # test_models.eval()
+        unlabeled_subset = torch.utils.data.Subset(self.unlabeled_dst, self.U_index_sub)
 
         with torch.cuda.device(0):
             sub_logit_all = torch.tensor([])
@@ -46,7 +50,8 @@ class TIDAL(ALMethod):
         with torch.no_grad():
             # first_batch = next(iter(unlabeled_loader))
             # print(first_batch)
-            for inputs, _, _  in unlabeled_loader:
+            unlabeled_loader = torch.utils.data.DataLoader(unlabeled_subset, batch_size=self.args.test_batch_size, num_workers=self.args.workers)
+            for inputs, _, _, _  in unlabeled_loader:
                 with torch.cuda.device(0):
                     inputs = inputs.cuda()
                 main_logit, _, features = models['backbone'](inputs, method='TIDAL')
@@ -54,8 +59,8 @@ class TIDAL(ALMethod):
                 pred_label = pred_label.detach().cpu()
                 # pred_label = pred_label.detach()
                 pred_label_all = torch.cat((pred_label_all, pred_label), 0)
-                # sub_logit = models['module'](features)
-                sub_logit = test_models(features)
+                sub_logit = models['module'](features)
+                # sub_logit = test_models(features)
                 sub_logit = sub_logit.detach().cpu()
                 sub_logit_all = torch.cat((sub_logit_all, sub_logit), 0)
                 # pred_label = pred_label.detach().cpu()

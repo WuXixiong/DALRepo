@@ -5,5 +5,5 @@ from .imagenet import *
 #from .imagenet30 import *
 from .mnist import *
 #from .qmnist import *
-#from .svhn import *
-#from .tinyimagenet import *
+from .svhn import *
+from .tinyimagenet import *

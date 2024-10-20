@@ -5,9 +5,8 @@ import numpy as np
 class Uncertainty(ALMethod):
     def __init__(self, args, models, unlabeled_dst, U_index, selection_method="CONF", **kwargs):
         super().__init__(args, models, unlabeled_dst, U_index, **kwargs)
-        selection_choices = ["CONF", "Entropy", "Margin", "MeanSTD", "AdversarialBIM","Adversarialdeepfool", "BALDDropout", "VarRatio", "MarginDropout",
+        selection_choices = ["CONF", "Entropy", "Margin", "MeanSTD", "AdversarialBIM", "BALDDropout", "VarRatio", "MarginDropout",
                              "CONFDropout", "EntropyDropout"]
-        # Adversarialdeepfool 还不能用。
         if selection_method not in selection_choices:
             raise NotImplementedError("Selection algorithm unavailable.")
         self.selection_method = selection_method
@@ -85,14 +84,13 @@ class Uncertainty(ALMethod):
             entropy1 = (-pb*torch.log(pb)).sum(1)
             entropy2 = (-probs*torch.log(probs)).sum(2).mean(0)
             uncertainties = entropy2 - entropy1
-            # 将Tensor转移到CPU并转换为NumPy数组
-            uncertainties_np = -uncertainties.cpu().numpy()  # 取负
+            uncertainties_np = -uncertainties.cpu().numpy()  # negative
             scores= np.append(scores, uncertainties_np)
         elif self.selection_method == "MarginDropout":
             probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
             probs_sorted, _ = probs.sort(descending=True)
             uncertainties = probs_sorted[:, 0] - probs_sorted[:,1]
-            uncertainties_np = -uncertainties.cpu().numpy()  # 取负
+            uncertainties_np = -uncertainties.cpu().numpy()  # negative
             scores= np.append(scores, uncertainties_np)
         elif self.selection_method == "CONFDropout":
             probs = self.predict_prob_dropout_split(self.unlabeled_set, selection_loader, n_drop=self.args.n_drop)
@@ -214,7 +212,7 @@ class Uncertainty(ALMethod):
                         ri = (value_i / torch.norm(wi.flatten())) * wi
                         # print(ri.shape)
                         # print(eta.shape)
-                        eta += ri.clone()  # 更新扰动
+                        eta += ri.clone()  # update
 
             nx.grad.data.zero_()
             out, _ = self.models['backbone'](nx + eta)

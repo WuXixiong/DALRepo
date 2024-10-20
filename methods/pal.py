@@ -129,33 +129,19 @@ class PAL(ALMethod):
             temp_Label = tmp_data[3]
             Un_Value = [Un_Value[i] for i in tmp_seq]
             query_Index = [query_Index[i] for i in tmp_seq]
-            # query_Index = list(map(int, query_Index))
-            # labelArr = [labelArr[i] for i in tmp_seq]
-            # for i in range(len(labelArr)):
-            #     if labelArr[i] >= self.args.num_IN_class:
-            #         ood_list.append(int(query_Index[i]))
-            
-            # ood_beg, q_beg = get_sequence(self.args, tmp_data, self.args.n_query-300)
-            # ood_back, q_back = get_sequence_back(self.args, tmp_data, 300)
-
-
-            # prec_back = (len(ood_back) + len(ood_beg)) / (len(q_back) + len(q_beg))
-
-            # select_ID = list(set(q_back)-set(ood_back)) + list(set(q_beg) - set(ood_beg))
-
-            # select_ID_len = len(select_ID)
-            # ood_back_len = len(ood_back) + len(ood_beg)
-            # precision = select_ID_len / self.args.n_query
-            # recall = (Len_labeled_ind_train + select_ID_len)/(Len_labeled_ind_train + Unlabel_ID)
-            # quey_back = q_beg + q_back
-            # print('{self.args.n_query} ood_numer precision is:' + str(prec_back))
-            # print('{self.args.n_query} ood_numer is:' + str(int(ood_back_len)))
-            # print('-'*40 + ' Finished Sampling ' + '-'*40)
-            # return select_ID, quey_back, precision, recall
             Q_index = [int(num) for num in query_Index]
             return Q_index, Un_Value
         
         else:
+            tmp_seq = np.argsort(tmp_data)[0][:self.args.n_query]
+            Un_Value = tmp_data[0]
+            query_Index = tmp_data[1]
+            labelArr = tmp_data[2]
+            temp_Label = tmp_data[3]
+            Un_Value = [Un_Value[i] for i in tmp_seq]
+            ori_query_Index = [query_Index[i] for i in tmp_seq]
+            ori_Q_index = [int(num) for num in ori_query_Index]
+        
             ood_back, q_back = get_sequence_back(self.args, tmp_data, self.args.n_query)
             prec_back = len(ood_back) / len(q_back)
             print(len(q_back))
@@ -206,4 +192,4 @@ class PAL(ALMethod):
             # return ID_ID_back, quey_back, precision, recall # for now
         
             Q_index = [int(num) for num in quey_back]
-            return Q_index, Un_Value
+            return ori_Q_index, Un_Value

@@ -82,11 +82,12 @@ class ResNet_32x32(nn.Module):
         self.embedding_recorder = EmbeddingRecorder(record_embedding)
         self.no_grad = no_grad
 
-        widen_factor = 8
-        channels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
-        self.fc = nn.Linear(channels[3], num_classes)
-        out_open = 2 * num_classes
-        self.fc_open = nn.Linear(channels[3], out_open, bias=False)
+        # PAL
+        # widen_factor = 8
+        # channels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
+        # self.fc = nn.Linear(channels[3], num_classes)
+        # out_open = 2 * num_classes
+        # self.fc_open = nn.Linear(channels[3], out_open, bias=False)
 
     def get_last_layer(self):
         return self.linear
@@ -109,8 +110,8 @@ class ResNet_32x32(nn.Module):
             out = F.avg_pool2d(out4, 4)
             out_cnn = out.view(out.size(0), -1)
             out = self.embedding_recorder(out_cnn)
-            if method=='PAL':
-                return self.fc(out), self.fc_open(out)
+            # if method=='PAL':
+            #     return self.fc(out), self.fc_open(out)
             out = self.linear(out)
 
             if method=='TIDAL':
@@ -191,7 +192,7 @@ def ResNet(arch: str, channel: int, num_classes: int, im_size, record_embedding:
         if num_classes != 1000:
             net.fc = nn.Linear(net.fc.in_features, num_classes)
 
-    elif im_size[0] == 224 and im_size[1] == 224:
+    elif (im_size[0] == 224 and im_size[1] == 224) or (channel == 3 and im_size[0] == 64 and im_size[1] == 64):
         if arch == "resnet18":
             net = ResNet_224x224(resnet.BasicBlock, [2, 2, 2, 2], channel=channel, num_classes=num_classes,
                                  record_embedding=record_embedding, no_grad=no_grad)

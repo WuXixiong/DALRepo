@@ -6,6 +6,9 @@ from utils import *
 parser = argparse.ArgumentParser(description='Parameter Processing')
 
 # new arguments
+parser.add_argument("--num-IN-class", type=int, default=100, help="how many classes are in domain")
+parser.add_argument("--init_dist", type=str, default='random',
+                    help="uniform / random.")
 # PAL
 parser.add_argument('--wdecay', default=5e-4, type=float,help='weight decay')
 parser.add_argument('--use-ema',  action='store_true', default=True, help='use EMA model')
@@ -55,7 +58,7 @@ parser.add_argument('--weight-cent', type=float, default=0, help="weight for cen
 # others
 parser.add_argument('--target_per_class', type=int, default=1000, help='# of target per classes in EPIG')
 parser.add_argument('--max_iter', type=int, default=100, help='# of max iterations in Adversarialdeepfool')
-parser.add_argument('--n_drop', type=int, default=10, help='# of drop out')
+parser.add_argument('--n-drop', type=int, default=10, help='# of drop out')
 parser.add_argument('--eps', type=int, default=0.05, help='The size of the perturbation at each iteration, representing the strength of the attack in AdversarialBIM')
 parser.add_argument('--openset', action='store_true', default=False, help='Whether to use openset')
 parser.add_argument('--imbalanceset', action='store_true', default=False, help='Whether to use imbalanceset')
@@ -104,7 +107,7 @@ parser.add_argument("--scheduler", default="MultiStepLR", type=str, help="Learni
 parser.add_argument('--min_lr', type=float, default=1e-4, help='minimum learning rate for CosineAnnealingLR')
 parser.add_argument("--gamma", type=float, default=.5, help="Gamma value for StepLR")
 parser.add_argument("--step_size", type=float, default=50, help="Step size for StepLR")
-parser.add_argument('--milestone', type=list, default=[100, 150], metavar='M', help='Milestone for MultiStepLR')
+parser.add_argument('--milestone', type=int, nargs='+', default=[100, 150], metavar='M', help='Milestone for MultiStepLR')
 parser.add_argument('--warmup', type=int, default=10, metavar='warmup', help='warmup epochs')
 
 # ing

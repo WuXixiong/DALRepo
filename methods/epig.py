@@ -1,4 +1,4 @@
-"""
+""" 
 Cl = number of classes
 K = number of model samples
 N_p = number of pool examples
@@ -77,6 +77,9 @@ class EPIG(ALMethod):
         log_term[nonzero_joint] -= torch.log(probs_pool_targ_indep[nonzero_joint])  # [N_p, N_t, Cl, Cl]
         scores = torch.sum(probs_joint * log_term, dim=-1)  # [N_p, N_t]
 
+        del probs_targ, probs_pool, probs_joint, probs_pool_targ_indep, log_term, nonzero_joint
+        torch.cuda.empty_cache()
+
         return scores  # [N_p, N_t]
 
     def predict_prob_dropout_split(self, dataset_length, to_predict_dataloader, n_drop):
@@ -113,7 +116,8 @@ class EPIG(ALMethod):
                     end_slice = start_slice + elements_to_predict.shape[0]
                     probs[i][start_slice:end_slice] = pred
                     evaluated_instances = end_slice
+        
+        del elements_to_predict, out, pred, start_slice, end_slice, evaluated_instances
+        torch.cuda.empty_cache()
 
         return probs
-
-    

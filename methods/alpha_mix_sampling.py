@@ -16,6 +16,9 @@ class AlphaMixSampling(ALMethod):
 		self.I_index = I_index
 		self.labeled_set = torch.utils.data.Subset(unlabeled_dst, I_index)
 		self.fc2 = None
+        # subset selection (for diversity)
+		subset_idx = np.random.choice(len(self.U_index), size=(min(self.args.subset, len(self.U_index)),), replace=False)
+		self.U_index_sub = np.array(self.U_index)[subset_idx]
 
 	def select(self):
 		n = self.args.n_query
@@ -24,7 +27,9 @@ class AlphaMixSampling(ALMethod):
 		#idxs = self.idxs_lb if idxs_prohibited is None else (self.idxs_lb + idxs_prohibited)
 		# idxs_unlabeled = np.arange(self.n_pool)[~idxs]
 		self.models['backbone'].eval()
-		selection_loader = torch.utils.data.DataLoader(self.unlabeled_set, batch_size=self.args.test_batch_size, num_workers=self.args.workers)
+		# selection_loader = torch.utils.data.DataLoader(self.unlabeled_set, batch_size=self.args.test_batch_size, num_workers=self.args.workers)
+		unlabeled_subset = torch.utils.data.Subset(self.unlabeled_dst, self.U_index_sub)
+		selection_loader = torch.utils.data.DataLoader(unlabeled_subset, batch_size=self.args.n_query, num_workers=self.args.workers)
 		scores = np.array([])
 		batch_num = len(selection_loader)
 		ulb_probs = None
@@ -132,7 +137,9 @@ class AlphaMixSampling(ALMethod):
 			selected_idxs = self.sample(min(n, candidate.sum().item()), feats=c_alpha)
 			# u_selected_idxs = candidate.nonzero(as_tuple=True)[0][selected_idxs]
 			# selected_idxs = self.U_index[candidate][selected_idxs] # not sure ???
-			selected_idxs = [self.U_index[i] for i in selected_idxs]
+			
+			# selected_idxs = [self.U_index[i] for i in selected_idxs]
+			selected_idxs = self.U_index_sub[selected_idxs]
 
 		else:
 			selected_idxs = np.array([], dtype=np.int)

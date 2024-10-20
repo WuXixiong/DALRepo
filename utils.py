@@ -16,6 +16,7 @@ from methods.methods_utils.simclr import semantic_train_epoch
 from methods.methods_utils.simclr_CSI import csi_train_epoch
 
 from copy import deepcopy
+from torch.utils.tensorboard import SummaryWriter
 
 # LFOSA
 class CenterLoss(nn.Module):
@@ -399,37 +400,69 @@ def train_epoch_LL(args, models, epoch, criterion, optimizers, dataloaders):
     models['backbone'].train()
     models['module'].train()
 
-    batch_idx = 0
-    while (batch_idx < args.steps_per_epoch):
-        for data in dataloaders['train']:
-            inputs, labels = data[0].to(args.device), data[1].to(args.device)
+    for data in dataloaders['train']:
+        inputs, labels = data[0].to(args.device), data[1].to(args.device)
 
-            optimizers['backbone'].zero_grad()
-            optimizers['module'].zero_grad()
+        optimizers['backbone'].zero_grad()
+        optimizers['module'].zero_grad()
 
-            # Classification loss for in-distribution
-            scores, features = models['backbone'](inputs)
-            target_loss = criterion(scores, labels)
-            m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
+        # Classification loss for in-distribution
+        scores, features = models['backbone'](inputs)
+        target_loss = criterion(scores, labels)
+        m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
 
-            # loss module for predLoss
-            if epoch > args.epoch_loss:
-                # After 120 epochs, stop the gradient from the loss prediction module
-                features[0] = features[0].detach()
-                features[1] = features[1].detach()
-                features[2] = features[2].detach()
-                features[3] = features[3].detach()
+        # loss module for predLoss
+        if epoch > args.epoch_loss:
+            # After 120 epochs, stop the gradient from the loss prediction module
+            features[0] = features[0].detach()
+            features[1] = features[1].detach()
+            features[2] = features[2].detach()
+            features[3] = features[3].detach()
 
-            pred_loss = models['module'](features)
-            pred_loss = pred_loss.view(pred_loss.size(0))
-            m_module_loss = LossPredLoss(pred_loss, target_loss, margin=1)
+        pred_loss = models['module'](features)
+        pred_loss = pred_loss.view(pred_loss.size(0))
+        m_module_loss = LossPredLoss(pred_loss, target_loss, margin=1)
 
-            loss = m_backbone_loss + m_module_loss
-            loss.backward()
-            optimizers['backbone'].step()
-            optimizers['module'].step()
+        loss = m_backbone_loss + m_module_loss
+        loss.backward()
+        optimizers['backbone'].step()
+        optimizers['module'].step()
 
-            batch_idx += 1
+# def train_epoch_LL(args, models, epoch, criterion, optimizers, dataloaders):
+def train_epoch_tidal(args, models, optimizers, dataloaders, epoch):
+    criterion = {}
+    criterion['CE'] = nn.CrossEntropyLoss(reduction='none')
+    criterion['KL_Div'] = nn.KLDivLoss(reduction='batchmean')
+    models['backbone'].train()
+    models['module'].train()
+
+    for data in dataloaders['train']: # , leave=False, total=len(dataloaders['train'])
+        with torch.cuda.device(0):
+            inputs = data[0].to(args.device)
+            labels = data[1].to(args.device)
+            index = data[2].detach().numpy().tolist()
+
+        optimizers['backbone'].zero_grad()
+        optimizers['module'].zero_grad()
+
+        scores, emb, features = models['backbone'](inputs, method='TIDAL')
+        target_loss = criterion['CE'](scores, labels)
+        probs = torch.softmax(scores, dim=1)
+
+        moving_prob = data[3].to(args.device)
+        moving_prob = (moving_prob * epoch + probs * 1) / (epoch + 1)
+        dataloaders['train'].dataset.moving_prob[index, :] = moving_prob.cpu().detach().numpy()
+
+        models['module'].to(args.device)
+        cumulative_logit = models['module'](features)
+        m_module_loss = criterion['KL_Div'](F.log_softmax(cumulative_logit, 1), moving_prob.detach())
+        m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
+        loss = m_backbone_loss + 1 * m_module_loss # 1.0 # lambda WEIGHT
+
+        loss.backward()
+        optimizers['backbone'].step()
+        optimizers['module'].step()
+    # return loss
 
 def train_epoch_lfosa(args, models, criterion, optimizers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss):
     models['ood_detection'].train()
@@ -469,21 +502,48 @@ def train_epoch_lfosa(args, models, criterion, optimizers, dataloaders, criterio
         xent_losses.update(loss_xent.item(), labels.size(0))
         cent_losses.update(loss_cent.item(), labels.size(0))
 
-def train_epoch(args, models, criterion, optimizers, dataloaders):
+def train_epoch(args, models, criterion, optimizers, dataloaders, writer, epoch):
     models['backbone'].train()
 
-    for data in dataloaders['train']:
+    running_loss = 0.0
+    correct_predictions = 0
+    total_predictions = 0
+    total_batches = len(dataloaders['train'])
+
+    for i, data in enumerate(dataloaders['train']):
         inputs, labels = data[0].to(args.device), data[1].to(args.device)
 
         optimizers['backbone'].zero_grad()
 
+        # 模型前向传播
         scores, _ = models['backbone'](inputs)
         target_loss = criterion(scores, labels)
         m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
-
         loss = m_backbone_loss
+
+        # 反向传播与优化
         loss.backward()
         optimizers['backbone'].step()
+
+        # 记录损失
+        running_loss += loss.item()
+
+        # 计算精确度: 通过 softmax 得到预测的类别
+        _, preds = torch.max(scores, 1)
+        correct_predictions += torch.sum(preds == labels).item()
+        total_predictions += labels.size(0)
+
+        # 每 100 个 batch 记录一次平均损失
+        if (i + 1) % 100 == 0:
+            avg_loss = running_loss / 100
+            writer.add_scalar('training_loss_batch', avg_loss, epoch * total_batches + i)
+            running_loss = 0.0
+
+    # 计算当前 epoch 的平均损失和精确度
+    epoch_loss = running_loss / total_batches
+    epoch_accuracy = correct_predictions / total_predictions
+
+    return epoch_loss, epoch_accuracy
 
 def train_epoch_eoal(args, models, criterion, optimizers, dataloaders, criterion_xent, O_index, cluster_centers, cluster_labels, cluster_indices):
     models['ood_detection'].train()
@@ -555,28 +615,6 @@ def train_epoch_eoal(args, models, criterion, optimizers, dataloaders, criterion
         if len(invalidList) > 0:
             k_losses.update(regu_loss.item(), labels.size(0))
 
-# def train_pal_cls_epoch(args, models, criterion, optimizers, dataloaders, ema_model):
-#     models['backbone'].train()
-
-#     for data in dataloaders['train']:
-#         inputs, labels = data[0].to(args.device), data[1].to(args.device)
-
-#         optimizers['backbone'].zero_grad()
-
-#         scores, features = models['backbone'](inputs)
-#         # lx = criterion(scores, labels)
-#         lx = F.cross_entropy(scores, labels, reduction='mean')
-#         lo = ova_loss(features, labels)
-#         target_loss = lx + lo
-#         m_backbone_loss = torch.sum(target_loss) / target_loss.size(0)
-
-#         loss = m_backbone_loss
-#         loss.backward()
-#         optimizers['backbone'].step()
-#         if args.use_ema:
-#             ema_model.update(models['backbone'])
-    
-#     return models['backbone'], ema_model
 
 def train_pal_cls_epoch(args, models, optimizers, dataloaders, ema_model):
     # if not args.no_progress:
@@ -649,26 +687,11 @@ def train_pal_meta_epoch(args, models, optimizers, dataloaders, coef, wnet, opti
     meta_model = models['ood_detection']
     meta_model.train()
 
+    # 将迭代器初始化移到循环外，避免每次循环都重新初始化
+    labeled_iter = iter(dataloaders['train'])
+    unlabeled_iter = iter(dataloaders['unlabeled'])
+
     for _ in range(args.meta_step):
-        # try:
-        #     feature_id, targets_x, index_x = labeled_iter.__next__()
-        # except:
-        #     if args.world_size > 1:
-        #         labeled_epoch += 1
-        #         labeled_trainloader.sampler.set_epoch(labeled_epoch)
-        #     labeled_iter = iter(labeled_trainloader)
-        #     feature_id, targets_x, index_x = labeled_iter.__next__()
-        # try:
-        #     feature_al, _, _ = unlabeled_all_iter.__next__()
-        # except:
-        #     unlabeled_all_iter = iter(unlabeled_trainloader_all)
-        #     feature_al, _, _ = unlabeled_all_iter.__next__()
-
-        # feature_id, targets_x, _ = next(iter(dataloader['train']))
-        # feature_al, _, _ = next(iter(dataloader['unlabeled']))
-
-        labeled_iter = iter(dataloaders['train'])
-        unlabeled_iter = iter(dataloaders['unlabeled'])
         try:
             # 获取下一个 labeled 数据
             feature_id, targets_x, _ = next(labeled_iter)
@@ -684,57 +707,62 @@ def train_pal_meta_epoch(args, models, optimizers, dataloaders, coef, wnet, opti
             unlabeled_iter = iter(dataloaders['unlabeled'])
             feature_al, _, _ = next(unlabeled_iter)
         b_size = feature_id.shape[0]
-        inputs_all = feature_al
-        inputs = torch.cat([feature_id, inputs_all], 0).to(args.device)
-        input_l = feature_id.to(args.device)
+
+        # 先将数据移动到设备，再进行拼接，避免在CPU上进行不必要的操作
+        feature_id = feature_id.to(args.device)
+        feature_al = feature_al.to(args.device)
+        inputs = torch.cat([feature_id, feature_al], 0)
+        input_l = feature_id  # 已经在设备上，无需再次调用 to()
         targets_x = targets_x.to(args.device)
+
         logits, logits_open = meta_model(inputs, method='PAL')
         logits_open_w = logits_open[b_size:]
         weight = wnet(logits_open_w)
 
-        norm = torch.sum(weight)
-        Lx = F.cross_entropy(logits[:b_size],
-                                targets_x, reduction='mean')
+        # 加上一个很小的 epsilon，避免除以零，并消除不必要的 if 语句
+        norm = torch.sum(weight) + 1e-8
+        Lx = F.cross_entropy(logits[:b_size], targets_x, reduction='mean')
         Lo = ova_loss(logits_open[:b_size], targets_x)
         losses_ova.update(Lo.item())
         L_o_u1, cost_w = ova_ent(logits_open_w)
-        cost_w = torch.reshape(cost_w, (len(cost_w),1))
-        if norm != 0:
-            loss_hat =  Lx + coef * (torch.sum(weight * cost_w)/norm + Lo)
+        cost_w = cost_w.view(-1, 1)  # 使用 view 代替 reshape，提高效率
 
-        else:
-            loss_hat =  Lx + coef * (torch.sum(weight * cost_w) + Lo)
+        loss_hat = Lx + coef * (torch.sum(weight * cost_w) / norm + Lo)
 
         meta_model.zero_grad()
         loss_hat.backward()
-        # meta_opt.step()
         optimizers['ood_detection'].step()
 
         losses_hat.update(loss_hat.item())
         y_l_hat, _ = meta_model(input_l, method='PAL')
-        L_cls = F.cross_entropy(y_l_hat[:b_size],
-                                targets_x, reduction='mean')
-        
-        #compute upper level objective
+        L_cls = F.cross_entropy(y_l_hat, targets_x, reduction='mean')
+
+        # 计算上层目标
         optimizer_wnet.zero_grad()
         L_cls.backward()
         optimizer_wnet.step()
         losses_wet.update(L_cls.item())
-        # output_args["loss_hat"] = losses_hat.avg
-        # output_args["loss_wet"] = losses_wet.avg
-
-    # return meta_model
-
 
 def train(args, models, criterion, optimizers, schedulers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss, O_index, cluster_centers, cluster_labels, cluster_indices, wnet, optimizer_wnet):
     print('>> Train a Model.')
-    # print("num_epochs: {}, steps_per_epoch: {}, total_update: {}".format(
-    #         args.epochs, args.steps_per_epoch, int(args.epochs*args.steps_per_epoch)) )
+    log_dir = f'logs/tensorboard/{args.method}_experiment'
+    writer = SummaryWriter(log_dir=log_dir)
 
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'CCAL', 'SIMILAR', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling', 'noise_stability', 'SAAL', 'VESSAL']:  # add new methods like VAAL
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'CCAL', 'SIMILAR', 'VAAL', 'WAAL', 'EPIG', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling', 'noise_stability', 'SAAL', 'VESSAL']:  # add new methods like VAAL
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
-            train_epoch(args, models, criterion, optimizers, dataloaders)
+            epoch_loss, epoch_accuracy = train_epoch(args, models, criterion, optimizers, dataloaders, writer, epoch)
             schedulers['backbone'].step()
+            writer.add_scalar('learning_rate', schedulers['backbone'].get_last_lr()[0], epoch)
+            writer.add_scalar('training_loss', epoch_loss, epoch)
+            writer.add_scalar('accuracy', epoch_accuracy, epoch)
+
+        writer.close()
+    
+    elif args.method =='TIDAL':
+        for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
+            train_epoch_tidal(args, models, optimizers, dataloaders, epoch)
+            schedulers['backbone'].step()
+            schedulers['module'].step()
     
     elif args.method == 'PAL':
         # ood_num = (args.num_IN_class+1)*2
@@ -751,13 +779,19 @@ def train(args, models, criterion, optimizers, schedulers, dataloaders, criterio
     
     elif args.method in ['LFOSA', 'EOAL']: #LFOSA, EOAL
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
-            train_epoch(args, models, criterion, optimizers, dataloaders)
+            epoch_loss, epoch_accuracy = train_epoch(args, models, criterion, optimizers, dataloaders, writer, epoch)
+            schedulers['backbone'].step()
+            writer.add_scalar('learning_rate', schedulers['backbone'].get_last_lr()[0], epoch)
+            writer.add_scalar('training_loss', epoch_loss, epoch)
+            writer.add_scalar('accuracy', epoch_accuracy, epoch)
+
             if args.method == 'LFOSA':
                 train_epoch_lfosa(args, models, criterion, optimizers, dataloaders, criterion_xent, criterion_cent, optimizer_centloss)
                 schedulers['ood_detection'].step()
             elif args.method == 'EOAL':
                 train_epoch_eoal(args, models, criterion, optimizers, dataloaders, criterion_xent, O_index, cluster_centers, cluster_labels, cluster_indices)
             schedulers['backbone'].step()
+        writer.close()
 
     elif args.method in ['LL']: #MQNet
         for epoch in tqdm(range(args.epochs), leave=False, total=args.epochs):
@@ -789,7 +823,10 @@ def test(args, models, dataloaders):
 
             # Compute output
             with torch.no_grad():
-                scores, _ = models['backbone'](inputs)
+                if args.method == 'TIDAL':
+                    scores, _ , _ = models['backbone'](inputs, method = 'TIDAL')
+                else:
+                    scores, _ = models['backbone'](inputs)
 
             # Measure accuracy and record loss
             prec1 = accuracy(scores.data, labels, topk=(1,))[0]
@@ -881,7 +918,7 @@ def get_more_args(args):
     else:
         args.device = cuda if torch.cuda.is_available() else 'cpu'
 
-    if args.dataset == 'CIFAR10':
+    if args.dataset in ['CIFAR10', 'SVHN']:
         args.channel = 3
         args.im_size = (32, 32)
         #args.num_IN_class = 4
@@ -901,17 +938,32 @@ def get_more_args(args):
         args.im_size = (224, 224)
         #args.num_IN_class = 50
 
+    elif args.dataset == 'TinyImageNet':
+        args.channel = 3
+        args.im_size = (64, 64)
+
     return args
 
 def get_models(args, nets, model, models):
     # Normal
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling', 'noise_stability', 'SAAL', 'VESSAL']: # add new methods
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling', 'noise_stability', 'SAAL', 'VESSAL']: # add new methods
         backbone = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device)
         if args.device == "cpu":
             print("Using CPU.")
         elif args.data_parallel == True:
             backbone = nets.nets_utils.MyDataParallel(backbone, device_ids=args.gpu)
         models = {'backbone': backbone}
+    
+    # TIDAL
+    if args.method == 'TIDAL':
+        backbone = nets.__dict__[model](args.channel, args.num_IN_class, args.im_size).to(args.device)
+        module = nets.tdnet.TDNet()
+        if args.device == "cpu":
+            print("Using CPU.")
+        elif args.data_parallel == True:
+            backbone = nets.nets_utils.MyDataParallel(backbone, device_ids=args.gpu)
+            module = nets.nets_utils.MyDataParallel(module, device_ids=args.gpu)
+        models = {'backbone': backbone, 'module': module}
 
     # SIMILAR
     elif args.method =='SIMILAR':
@@ -1016,6 +1068,11 @@ def get_optim_configurations(args, models):
     if args.optimizer == "SGD":
         optimizer = torch.optim.SGD(models['backbone'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
+        if args.method =='TIDAL':
+            optimizer = torch.optim.SGD(models['backbone'].parameters(), args.lr, momentum=args.momentum,
+                                    weight_decay=args.weight_decay)
+            optim_module = torch.optim.SGD(models['module'].parameters(), lr=args.lr,
+                                         momentum=args.momentum, weight_decay=args.weight_decay)
         if args.method in ['LFOSA', 'EOAL', 'PAL']:
             optimizer_ood = torch.optim.SGD(models['ood_detection'].parameters(), args.lr, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
@@ -1059,12 +1116,12 @@ def get_optim_configurations(args, models):
             scheduler_ood = torch.optim.lr_scheduler.__dict__[args.scheduler](optimizer_ood)
 
     # Normal
-    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'TIDAL', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling', 'noise_stability', 'SAAL', 'VESSAL']: # also add new methods
+    if args.method in ['Random', 'Uncertainty', 'Coreset', 'BADGE', 'VAAL', 'WAAL', 'EPIG', 'EntropyCB', 'CoresetCB', 'AlphaMixSampling', 'noise_stability', 'SAAL', 'VESSAL']: # also add new methods
         optimizers = {'backbone': optimizer}
         schedulers = {'backbone': scheduler}
 
     # LL (+ loss_pred module)
-    elif args.method == 'LL':
+    elif args.method in ['LL', 'TIDAL']:
         optim_module = torch.optim.SGD(models['module'].parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         sched_module = torch.optim.lr_scheduler.MultiStepLR(optim_module, milestones=args.milestone)
 

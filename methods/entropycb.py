@@ -40,7 +40,6 @@ class EntropyCB(ALMethod):
         L1_Loss=[]
         ENT_Loss=[]
         # Adaptive counts of samples per cycle
-        # labeled_classes=self.unlabeled_dst[self.I_index] # what is idxs_lb??? The labelled indices = I_index
         labelled_subset = torch.utils.data.Subset(self.unlabeled_dst, self.I_index)
         labelled_classes = [labelled_subset[i][1] for i in range(len(labelled_subset))]
         _, counts = np.unique(labelled_classes, return_counts=True)
@@ -51,6 +50,8 @@ class EntropyCB(ALMethod):
             lamda=0.6
         elif self.args.dataset == 'CIFAR100':
             lamda=2
+        elif self.args.dataset == 'TinyImageNet':
+            lamda=3
             # maybe need another parameter for imagenet
 
         for lam in [lamda]:
